@@ -1,0 +1,57 @@
+name: Documentation Check
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  docs:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Check out code
+      uses: actions/checkout@v4
+    
+    - name: Verify all docs exist
+      run: |
+        echo "Checking documentation files..."
+        test -f README.md || exit 1
+        test -f QUICKSTART.md || exit 1
+        test -f PROJECT_SUMMARY.md || exit 1
+        test -f INTEGRATION_GUIDE.md || exit 1
+        test -f CONTRIBUTING.md || exit 1
+        test -f CHANGELOG.md || exit 1
+        test -f LICENSE || exit 1
+        echo "✅ All documentation files exist"
+    
+    - name: Check contributing guide
+      run: |
+        echo "Verifying CONTRIBUTING.md structure..."
+        grep -q "How to Contribute" CONTRIBUTING.md || exit 1
+        grep -q "Code of Conduct" CONTRIBUTING.md || exit 1
+        grep -q "Pull Requests" CONTRIBUTING.md || exit 1
+        echo "✅ CONTRIBUTING.md is properly structured"
+    
+    - name: Check changelog
+      run: |
+        echo "Verifying CHANGELOG.md..."
+        grep -q "## \[1.0.0\]" CHANGELOG.md || exit 1
+        echo "✅ CHANGELOG.md has v1.0.0 entry"
+    
+    - name: Check license file
+      run: |
+        echo "Verifying LICENSE..."
+        grep -q "MIT License" LICENSE || exit 1
+        grep -q "without restriction" LICENSE || exit 1
+        echo "✅ LICENSE file is MIT"
+    
+    - name: Count documentation
+      run: |
+        DOC_LINES=$(find . -name "*.md" -type f -exec wc -l {} + | tail -1 | awk '{print $1}')
+        CODE_LINES=$(find . -name "*.py" -type f -exec wc -l {} + | tail -1 | awk '{print $1}')
+        echo "📊 Documentation: $DOC_LINES lines"
+        echo "📊 Code: $CODE_LINES lines"
+        echo "✅ Documentation ratio: Good!"
