@@ -1,0 +1,8 @@
+# NPC Dialogue System - Python Dependencies
+
+# HTTP client for Ollama API
+requests>=2.31.0
+
+# Optional: For future RAG/lore retrieval
+# chromadb>=0.4.0
+# sentence-transformers>=2.2.0
