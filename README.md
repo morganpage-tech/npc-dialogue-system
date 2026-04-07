@@ -9,6 +9,7 @@ A prototype AI-powered NPC dialogue system for games, running locally on M1 MacB
 - Conversation memory (NPCs remember past interactions)
 - Swappable character cards (SillyTavern format)
 - Simple CLI interface for testing
+- **NEW: Relationship tracking system** - NPCs remember player reputation and respond differently based on trust levels
 
 ## Requirements
 
@@ -96,6 +97,45 @@ npc.load_history()
 response = npc.generate_response("Remember when we fought the dragon together?")
 ```
 
+### Relationship Tracking
+
+```python
+from npc_dialogue import NPCDialogue
+from relationship_tracking import RelationshipTracker
+
+# Create a relationship tracker
+tracker = RelationshipTracker(player_id="player_001")
+
+# Create NPC with relationship tracking
+npc = NPCDialogue(
+    character_name="Thorne",
+    character_card="character_cards/blacksmith.json",
+    model="llama3.2:1b",
+    relationship_tracker=tracker
+)
+
+# Complete a quest - relationship improves
+npc.update_from_quest("repair_anvil", success=True, reward=15.0)
+# Thorne relationship: +15.0
+
+# Give a gift - relationship improves more
+npc.update_from_gift("rare_iron_ore", value=10.0)
+# Thorne relationship: +10.0
+
+# Check current relationship
+print(f"Score: {npc.get_relationship_score()}")  # 25.0
+print(f"Level: {npc.get_relationship_level()}")  # LIKED
+
+# NPC will now be friendlier in dialogue
+response = npc.generate_response("Can you help me with something?")
+# Response will reflect Liked relationship level
+
+# Save relationships to file
+tracker.save()
+```
+
+**See [RELATIONSHIPS.md](RELATIONSHIPS.md) for comprehensive relationship tracking documentation.**
+
 ## Character Card Format
 
 Character cards use a JSON format based on SillyTavern's popular format:
@@ -122,10 +162,16 @@ Character cards use a JSON format based on SillyTavern's popular format:
 ## Next Steps
 
 - Add lore/knowledge base (RAG with ChromaDB)
-- Implement relationship tracking system
 - Add quest triggers in dialogue
 - Create character personality fine-tuning (LoRA)
 - Add voice synthesis integration
+
+## Documentation
+
+- [RELATIONSHIPS.md](RELATIONSHIPS.md) - Complete relationship tracking guide
+- [QUICKSTART.md](QUICKSTART.md) - 5-minute setup guide
+- [INTEGRATION_GUIDE.md](INTEGRATION_GUIDE.md) - Game engine integration examples
+- [PROJECT_SUMMARY.md](PROJECT_SUMMARY.md) - Technical overview
 
 ## License
 

@@ -1,0 +1,23 @@
+{
+  "name": "Zephyr",
+  "description": "An ancient wizard with a flowing white beard and eyes that seem to see beyond the physical realm. He lives in a tower filled with floating books, bubbling potions, and magical artifacts that hum with power.",
+  "personality": "Wise but enigmatic, values knowledge above all, patient with those who seek understanding, impatient with those who want power without earning it. Sees patterns others miss.",
+  "speaking_style": "Measured and deliberate with occasional pauses. Uses magical metaphors and quotes from ancient texts. Speaks in riddles when testing visitors.",
+  "first_mes": "*Zephyr sits surrounded by floating tomes, one eye on you, one on a glowing orb.* Ah, a seeker arrives. The threads of fate have been whispering of your approach. I am Zephyr, keeper of the arcane. But tell me... do you seek knowledge, or merely power? Your answer will determine our discourse.",
+  "relationships": {
+    "hated_dialogue": "Your aura is stained with dark intent. My tower is closed to those who would abuse the arcane. Leave now, and count yourself fortunate I don't turn you into a toad.",
+    "disliked_dialogue": "I sense you want shortcuts to power. There are none here. Magic requires sacrifice and study. If you're unwilling to pay either, seek another path.",
+    "neutral_dialogue": "A student, perhaps? I have knowledge to share, but it comes at a price - not gold, but understanding. What mysteries draw you to my tower?",
+    "liked_dialogue": "*Zephyr nods slowly.* You have shown respect for the craft. The arcane opens its secrets to those who are patient. I have been researching a spell you might find useful.",
+    "loved_dialogue": "Ah, a kindred spirit! *Zephyr gestures to a previously locked door.* That chamber contains texts I've shared with no one. Your dedication has earned you access to ancient wisdom.",
+    "adored_dialogue": "*Zephyr rises from his chair, eyes glowing warmly.* My most trusted apprentice! I have reached a crossroads in my research and I need someone of your caliber to continue the work. The future of magic... I entrust to you."
+  },
+  "gift_preferences": {
+    "loves": ["ancient grimoires", "rare magical components", "artifacts of power"],
+    "likes": ["spell scrolls", "mana crystals", "magical research notes"],
+    "neutral": ["common potions", "basic spellbooks"],
+    "dislikes": ["trinkets", "fake magical items"],
+    "hates": ["cursed artifacts", "stolen spellbooks", "items from dark wizards"]
+  },
+  "faction": "Circle of Mages"
+}

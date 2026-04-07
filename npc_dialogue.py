@@ -9,6 +9,7 @@ import time
 from pathlib import Path
 from typing import List, Dict, Optional
 import requests
+from relationship_tracking import RelationshipTracker, RelationshipLevel
 
 
 class NPCDialogue:
@@ -26,6 +27,7 @@ class NPCDialogue:
         max_history: int = 20,
         temperature: float = 0.8,
         max_tokens: int = 500,
+        relationship_tracker: Optional[RelationshipTracker] = None,
     ):
         """
         Initialize an NPC with a character card and model settings.
@@ -38,11 +40,13 @@ class NPCDialogue:
             max_history: Number of conversation turns to remember
             temperature: Randomness (0.0-1.0, higher = more creative)
             max_tokens: Maximum response length
+            relationship_tracker: Optional RelationshipTracker instance
         """
         self.character_name = character_name
         self.model = model
         self.player_id = player_id
         self.max_history = max_history
+        self.base_temperature = temperature  # Store base temperature
         self.temperature = temperature
         self.max_tokens = max_tokens
         
@@ -51,6 +55,14 @@ class NPCDialogue:
         
         # Conversation history
         self.history: List[Dict[str, str]] = []
+        
+        # Relationship tracking
+        self.relationship_tracker = relationship_tracker
+        if self.relationship_tracker:
+            # Adjust temperature based on current relationship
+            self.temperature = self.relationship_tracker.get_temperature_adjustment(
+                character_name, self.base_temperature
+            )
         
         # Ollama API endpoint
         self.api_url = "http://localhost:11434/api/chat"
@@ -100,6 +112,16 @@ IMPORTANT:
 - Remember previous conversations with this player
 """
 
+        # Add relationship context if tracker is available
+        if self.relationship_tracker:
+            rel_level = self.relationship_tracker.get_level(self.character_name)
+            rel_modifier = self.relationship_tracker.get_speaking_style_modifier(self.character_name)
+            
+            if rel_modifier:
+                prompt += f"\nYOUR RELATIONSHIP WITH THIS PLAYER:\n{rel_modifier}\n"
+            
+            prompt += f"\nCurrent relationship level: {rel_level.name}\n"
+        
         # Add any game state context
         if game_state:
             prompt += f"\nCURRENT SITUATION:\n{self._format_game_state(game_state)}\n"
@@ -183,12 +205,13 @@ IMPORTANT:
                 self.history = self.history[-self.max_history:]
             
             elapsed = time.time() - start_time
-            
+
             if show_thinking:
-                tokens = len(npc_response.split())
+                # Try to get token count from response (Ollama returns eval_count)
+                tokens = result.get('eval_count', 0)
                 tps = tokens / elapsed if elapsed > 0 else 0
                 print(f" ✓ ({tokens} tokens, {elapsed:.1f}s, {tps:.1f} tok/s)")
-            
+
             return npc_response
             
         except requests.exceptions.RequestException as e:
@@ -265,7 +288,86 @@ IMPORTANT:
         print(f"   {self.character_card.get('speaking_style', 'Natural')}")
         print(f"\n📝 First Message:")
         print(f"   {self.character_card.get('first_mes', 'N/A')}")
+        
+        # Show relationship info if available
+        if self.relationship_tracker:
+            rel_level = self.relationship_tracker.get_level(self.character_name)
+            rel_score = self.relationship_tracker.get_relationship(self.character_name).score
+            print(f"\n💖 Relationship: {rel_level.name} ({rel_score:+.1f})")
+        
         print(f"\n{'='*60}\n")
+    
+    def get_relationship_level(self) -> Optional[str]:
+        """Get current relationship level with the player."""
+        if not self.relationship_tracker:
+            return None
+        return self.relationship_tracker.get_level(self.character_name).name
+    
+    def get_relationship_score(self) -> Optional[float]:
+        """Get current relationship score with the player."""
+        if not self.relationship_tracker:
+            return None
+        return self.relationship_tracker.get_relationship(self.character_name).score
+    
+    def update_from_quest(self, quest_id: str, success: bool = True, reward: float = 15.0) -> Optional[float]:
+        """
+        Update relationship after quest completion.
+        
+        Args:
+            quest_id: Unique quest identifier
+            success: Whether quest was completed successfully
+            reward: Score change on success (penalty on failure)
+            
+        Returns:
+            New relationship score, or None if no tracker
+        """
+        if not self.relationship_tracker:
+            return None
+        return self.relationship_tracker.update_from_quest(
+            self.character_name, quest_id, success, reward
+        )
+    
+    def update_from_gift(self, item_name: str, value: float = 5.0) -> Optional[float]:
+        """
+        Update relationship after giving a gift.
+        
+        Args:
+            item_name: Name of the gifted item
+            value: Relationship value of the item
+            
+        Returns:
+            New relationship score, or None if no tracker
+        """
+        if not self.relationship_tracker:
+            return None
+        return self.relationship_tracker.update_from_gift(
+            self.character_name, item_name, value
+        )
+    
+    def update_from_dialogue(self, dialogue_type: str, sentiment: float = 0.0) -> Optional[float]:
+        """
+        Update relationship from dialogue choice.
+        
+        Args:
+            dialogue_type: Type of dialogue ('friendly', 'hostile', 'neutral', 'flirt', 'insult')
+            sentiment: Custom sentiment value (-1.0 to 1.0)
+            
+        Returns:
+            New relationship score, or None if no tracker
+        """
+        if not self.relationship_tracker:
+            return None
+        return self.relationship_tracker.update_from_dialogue(
+            self.character_name, dialogue_type, sentiment
+        )
+    
+    def refresh_temperature(self):
+        """Refresh temperature based on current relationship score."""
+        if self.relationship_tracker:
+            self.temperature = self.relationship_tracker.get_temperature_adjustment(
+                self.character_name, self.base_temperature
+            )
+
 
 
 class NPCManager:
@@ -274,8 +376,9 @@ class NPCManager:
     Handles loading characters and maintaining separate conversations.
     """
     
-    def __init__(self, model: str = "llama3.2:1b"):
+    def __init__(self, model: str = "llama3.2:1b", relationship_tracker: Optional[RelationshipTracker] = None):
         self.model = model
+        self.relationship_tracker = relationship_tracker
         self.npcs: Dict[str, NPCDialogue] = {}
         self.active_npc: Optional[NPCDialogue] = None
     
@@ -296,6 +399,7 @@ class NPCManager:
             character_card_path=character_path,
             model=self.model,
             player_id=player_id,
+            relationship_tracker=self.relationship_tracker,
             **kwargs
         )
         
@@ -325,3 +429,32 @@ class NPCManager:
         """Load all conversation histories."""
         for npc in self.npcs.values():
             npc.load_history(directory)
+    
+    def save_relationships(self, filepath: Optional[str] = None):
+        """Save relationship data for all NPCs."""
+        if not self.relationship_tracker:
+            print("⚠️  No relationship tracker configured")
+            return
+        self.relationship_tracker.save(filepath)
+    
+    def load_relationships(self, filepath: Optional[str] = None):
+        """Load relationship data for all NPCs."""
+        if not self.relationship_tracker:
+            print("⚠️  No relationship tracker configured")
+            return
+        self.relationship_tracker.load(filepath)
+        # Refresh temperatures for all NPCs based on loaded relationships
+        for npc in self.npcs.values():
+            npc.refresh_temperature()
+    
+    def print_relationship_summary(self):
+        """Print relationship summary for all NPCs."""
+        if not self.relationship_tracker:
+            print("⚠️  No relationship tracker configured")
+            return
+        self.relationship_tracker.print_summary()
+    
+    def get_relationship_tracker(self) -> Optional[RelationshipTracker]:
+        """Get the relationship tracker instance."""
+        return self.relationship_tracker
+
