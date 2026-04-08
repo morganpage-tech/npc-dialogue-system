@@ -1,0 +1,37 @@
+{
+  "category": "history",
+  "entries": [
+    {
+      "id": "great_war",
+      "title": "The Great War",
+      "content": "100 years ago, the five kingdoms fought a devastating war that lasted 20 years. The conflict began when King Aldric of the Northern Realm discovered ancient magical artifacts and sought to unite all lands under his rule. The war ended with the signing of the Treaty of Five Peaks, establishing peace but leaving deep scars on all nations. Many ancient cities were destroyed, and entire bloodlines were wiped out. The magical artifacts used during the war caused permanent changes to the landscape, creating the Scarred Wastes in the east.",
+      "known_by": ["everyone"],
+      "importance": 0.9,
+      "tags": ["war", "history", "kingdoms", "magic", "treaty"]
+    },
+    {
+      "id": "founding_ironhold",
+      "title": "Founding of Ironhold",
+      "content": "Ironhold was founded 300 years ago by the dwarf Thrain Ironforge, who discovered rich veins of mithril in the mountains. The city grew from a small mining outpost into the greatest forge in the known world. The Ironforge clan still rules the city, and their craftsmanship is legendary. The forges of Ironhold never sleep, and the city exports weapons and armor to all five kingdoms.",
+      "known_by": ["Thorne", "Elara", "historians", "blacksmiths"],
+      "importance": 0.7,
+      "tags": ["ironhold", "dwarves", "mining", "forge", "history"]
+    },
+    {
+      "id": "mage_purge",
+      "title": "The Mage Purge",
+      "content": "50 years ago, fearing the power of unchecked magic, the Church of the Light orchestrated a purge of unlicensed mages. Thousands were imprisoned or executed. Many mages fled to the remote corners of the realm or went into hiding. The Purge ended when Archmage Velindra exposed corruption within the Church itself. Relations between mages and the Church remain tense to this day.",
+      "known_by": ["Zephyr", "wizards", "historians"],
+      "importance": 0.8,
+      "tags": ["magic", "church", "persecution", "wizards", "history"]
+    },
+    {
+      "id": "dragon_age",
+      "title": "The Dragon Age",
+      "content": "500 years ago, dragons ruled the skies and demanded tribute from all mortal kingdoms. The Dragon Age ended when the first Dragonriders learned to bond with dragons, creating a partnership that drove the wild dragons to remote mountains. Most dragons now live in the Dragonspine Peaks, rarely seen by common folk. Some say the ancient dragons still remember when they ruled all.",
+      "known_by": ["everyone"],
+      "importance": 0.6,
+      "tags": ["dragons", "dragonriders", "history", "ancient"]
+    }
+  ]
+}

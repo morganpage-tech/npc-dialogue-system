@@ -1,0 +1,45 @@
+{
+  "category": "factions",
+  "entries": [
+    {
+      "id": "merchant_guild",
+      "title": "The Merchant Guild",
+      "content": "The Merchant Guild controls trade across all five kingdoms. They maintain roads, protect caravans, and set fair prices. Membership is expensive but provides access to exclusive trading routes and protection. The Guild is led by a council of the five richest merchant families. They are neutral in political matters, trading with all sides equally. Breaking Guild rules results in blacklisting - no one will trade with you.",
+      "known_by": ["Elara", "merchants", "everyone"],
+      "importance": 0.7,
+      "tags": ["merchants", "trade", "neutral", "guild", "wealth"]
+    },
+    {
+      "id": "arcane_order",
+      "title": "Order of Arcane Studies",
+      "content": "The Order of Arcane Studies is the premier magical institution in the realm. Based in the Crystal Citadel, they research all forms of magic and train new wizards. Membership is by invitation only, and candidates must demonstrate exceptional talent. The Order maintains a strict code of ethics regarding magical use. Some say they secretly research forbidden magic in hidden chambers.",
+      "known_by": ["Zephyr", "wizards", "nobles"],
+      "importance": 0.8,
+      "tags": ["wizards", "magic", "citadel", "research", "order"]
+    },
+    {
+      "id": "church_light",
+      "title": "Church of the Light",
+      "content": "The Church of the Light is the dominant religion in the realm, worshipping the Sun God Solarius. They provide healing to the poor and maintain temples in every major city. The Church has a complicated history with magic users, having orchestrated the Mage Purge 50 years ago. The current High Priestess seeks reconciliation, but many mages still distrust the Church.",
+      "known_by": ["everyone"],
+      "importance": 0.7,
+      "tags": ["religion", "church", "healing", "magic", "politics"]
+    },
+    {
+      "id": "thieves_guild",
+      "title": "The Shadowhand Thieves Guild",
+      "content": "The Shadowhand is a secretive organization of thieves, assassins, and spies. They operate in every major city but are nearly impossible to find unless you know the right people. They have a code: never steal from the poor, never harm children, and never break a contract. The Guild leader is known only as the Whisper. They charge high prices but always deliver.",
+      "known_by": ["thieves", "guards", "criminals"],
+      "importance": 0.6,
+      "tags": ["thieves", "criminal", "secretive", "assassins", "spies"]
+    },
+    {
+      "id": "rangers_guild",
+      "title": "The Ranger's Brotherhood",
+      "content": "The Ranger's Brotherhood protects the wilderness and maintains peace in the borderlands. They are skilled trackers, hunters, and survivalists. The Brotherhood accepts anyone who can pass their trials, regardless of background. They are allies with the Eldari elves and serve as intermediaries between civilization and the wild. Their headquarters is hidden somewhere in the Mystwood Forest.",
+      "known_by": ["rangers", "elves", "travelers"],
+      "importance": 0.6,
+      "tags": ["rangers", "wilderness", "elves", "protection", "tracking"]
+    }
+  ]
+}

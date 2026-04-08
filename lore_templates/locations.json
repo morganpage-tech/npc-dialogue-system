@@ -1,0 +1,53 @@
+{
+  "category": "locations",
+  "entries": [
+    {
+      "id": "ironhold",
+      "title": "Ironhold - The Mountain City",
+      "content": "Ironhold is a vast dwarven city carved into the heart of the Ironpeak Mountains. Its great forges burn day and night, and the sound of hammers never ceases. The city is ruled by the Ironforge clan and is famous for producing the finest weapons and armor in the realm. The lower depths contain mines that stretch for miles, and rumors speak of ancient creatures lurking in the deepest tunnels. Visitors are welcome in the upper levels, but the forges below are restricted to citizens only.",
+      "known_by": ["everyone"],
+      "importance": 0.8,
+      "tags": ["city", "dwarves", "forge", "mountains", "mining"]
+    },
+    {
+      "id": "mystwood",
+      "title": "The Mystwood Forest",
+      "content": "The Mystwood is an ancient forest shrouded in perpetual mist. Travelers often become lost within its boundaries, as the paths shift and change. The forest is home to the Eldari, an elven people who guard its secrets fiercely. Strange lights are sometimes seen deep within, and the trees themselves are said to whisper warnings to those who listen. Many have entered seeking lost treasures; few have returned.",
+      "known_by": ["everyone"],
+      "importance": 0.7,
+      "tags": ["forest", "elves", "mystery", "magic", "dangerous"]
+    },
+    {
+      "id": "shadowfen",
+      "title": "Shadowfen Swamp",
+      "content": "Shadowfen is a treacherous swamp in the southern lowlands. The waters are dark and deep, hiding ancient ruins from a civilization long forgotten. Will-o'-wisps lure unwary travelers to their doom, and massive serpents lurk beneath the surface. However, rare herbs and ingredients for powerful potions can only be found here, drawing alchemists and healers despite the dangers.",
+      "known_by": ["Zephyr", "alchemists", "healers"],
+      "importance": 0.6,
+      "tags": ["swamp", "dangerous", "ruins", "ingredients", "potions"]
+    },
+    {
+      "id": "crystal_citadel",
+      "title": "The Crystal Citadel",
+      "content": "High in the Cloudreach Peaks sits the Crystal Citadel, home to the Order of Arcane Studies. The citadel is built from crystal formations that amplify magical energy, making it the premier location for magical research. Only those with magical talent may enter, and the Order is highly selective about new members. The Grand Library within contains tomes from every age, including forbidden knowledge sealed away for safety.",
+      "known_by": ["Zephyr", "wizards"],
+      "importance": 0.8,
+      "tags": ["citadel", "wizards", "magic", "library", "order"]
+    },
+    {
+      "id": "port_harbor",
+      "title": "Port Harbor",
+      "content": "Port Harbor is the largest trading city on the western coast. Ships from across the sea bring exotic goods, spices, and strange artifacts. The city is a melting pot of cultures, and almost anything can be found in its markets for the right price. The Harbor District is known for its taverns, gambling halls, and occasional violence, while the Merchant Quarter houses the wealthy trading families.",
+      "known_by": ["everyone"],
+      "importance": 0.7,
+      "tags": ["port", "trading", "ships", "market", "coast"]
+    },
+    {
+      "id": "scarred_wastes",
+      "title": "The Scarred Wastes",
+      "content": "The Scarred Wastes are a barren desert in the east, created by magical weapons during the Great War. Nothing grows there, and the sand itself is infused with unstable magic. Travelers who venture too far into the wastes often never return. Despite the danger, scavengers search the ruins of ancient cities that were consumed when the wastes were created, hoping to find powerful artifacts.",
+      "known_by": ["everyone"],
+      "importance": 0.6,
+      "tags": ["desert", "ruins", "dangerous", "artifacts", "magic"]
+    }
+  ]
+}

@@ -7,9 +7,17 @@ import json
 import os
 import time
 from pathlib import Path
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, TYPE_CHECKING
 import requests
 from relationship_tracking import RelationshipTracker, RelationshipLevel
+
+# Lore system import (optional)
+try:
+    from lore_system import LoreSystem
+    HAS_LORE_SYSTEM = True
+except ImportError:
+    HAS_LORE_SYSTEM = False
+    LoreSystem = None
 
 
 class NPCDialogue:
@@ -28,6 +36,7 @@ class NPCDialogue:
         temperature: float = 0.8,
         max_tokens: int = 500,
         relationship_tracker: Optional[RelationshipTracker] = None,
+        lore_system: Optional['LoreSystem'] = None,
     ):
         """
         Initialize an NPC with a character card and model settings.
@@ -63,6 +72,9 @@ class NPCDialogue:
             self.temperature = self.relationship_tracker.get_temperature_adjustment(
                 character_name, self.base_temperature
             )
+        
+        # Lore system (RAG for world knowledge)
+        self.lore_system = lore_system
         
         # Ollama API endpoint
         self.api_url = "http://localhost:11434/api/chat"
@@ -128,6 +140,26 @@ IMPORTANT:
         
         return prompt
     
+    def _build_system_prompt_with_lore(
+        self, 
+        user_input: str,
+        game_state: Optional[Dict] = None
+    ) -> str:
+        """Build system prompt with relevant lore context."""
+        prompt = self._build_system_prompt(game_state)
+        
+        # Add lore context if available
+        if self.lore_system:
+            lore_context = self.lore_system.get_context_for_npc(
+                npc_name=self.character_name,
+                query=user_input,
+                max_tokens=400
+            )
+            if lore_context:
+                prompt += f"\n{lore_context}\n"
+        
+        return prompt
+    
     def _format_game_state(self, game_state: Dict) -> str:
         """Format game state for context."""
         formatted = []
@@ -138,12 +170,19 @@ IMPORTANT:
     def _format_messages(
         self,
         user_input: str,
-        game_state: Optional[Dict] = None
+        game_state: Optional[Dict] = None,
+        use_lore: bool = True
     ) -> List[Dict]:
         """Format messages for Ollama API."""
         
+        # Use lore-enhanced prompt if available and enabled
+        if use_lore and self.lore_system:
+            system_content = self._build_system_prompt_with_lore(user_input, game_state)
+        else:
+            system_content = self._build_system_prompt(game_state)
+        
         messages = [
-            {"role": "system", "content": self._build_system_prompt(game_state)},
+            {"role": "system", "content": system_content},
         ]
         
         # Add conversation history
@@ -376,9 +415,15 @@ class NPCManager:
     Handles loading characters and maintaining separate conversations.
     """
     
-    def __init__(self, model: str = "llama3.2:1b", relationship_tracker: Optional[RelationshipTracker] = None):
+    def __init__(
+        self, 
+        model: str = "llama3.2:1b", 
+        relationship_tracker: Optional[RelationshipTracker] = None,
+        lore_system: Optional['LoreSystem'] = None
+    ):
         self.model = model
         self.relationship_tracker = relationship_tracker
+        self.lore_system = lore_system
         self.npcs: Dict[str, NPCDialogue] = {}
         self.active_npc: Optional[NPCDialogue] = None
     
@@ -394,12 +439,17 @@ class NPCManager:
         
         character_name = card.get('name', 'Unknown')
         
+        # Pass relationship_tracker and lore_system if not already specified
+        if 'relationship_tracker' not in kwargs:
+            kwargs['relationship_tracker'] = self.relationship_tracker
+        if 'lore_system' not in kwargs:
+            kwargs['lore_system'] = self.lore_system
+        
         npc = NPCDialogue(
             character_name=character_name,
             character_card_path=character_path,
             model=self.model,
             player_id=player_id,
-            relationship_tracker=self.relationship_tracker,
             **kwargs
         )
         

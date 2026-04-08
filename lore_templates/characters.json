@@ -1,0 +1,45 @@
+{
+  "category": "characters",
+  "entries": [
+    {
+      "id": "thorne_profile",
+      "title": "Thorne the Blacksmith",
+      "content": "Thorne is a master blacksmith who has operated his forge in the village for over 30 years. A dwarf of few words but immense skill, he learned his craft in Ironhold before choosing a quieter life. He has a gruff exterior but a heart of gold for those who earn his trust. His weapons have saved countless lives, and he takes pride in every piece he creates. He harbors a deep hatred for goblins, who killed his brother during a mining expedition.",
+      "known_by": ["Thorne", "villagers", "Elara"],
+      "importance": 0.8,
+      "tags": ["blacksmith", "dwarf", "ironhold", "goblins", "craft"]
+    },
+    {
+      "id": "elara_profile",
+      "title": "Elara the Merchant",
+      "content": "Elara is a traveling merchant who visits the village monthly with goods from distant lands. She has an extensive network of contacts and seems to know everyone's business. Her cheerful demeanor and fair prices have made her popular throughout the region. She was once a noble but left that life behind for reasons she rarely discusses. She carries a strange amulet that she never removes.",
+      "known_by": ["Elara", "villagers", "Thorne", "merchants"],
+      "importance": 0.8,
+      "tags": ["merchant", "noble", "traveler", "amulet", "mystery"]
+    },
+    {
+      "id": "zephyr_profile",
+      "title": "Zephyr the Wizard",
+      "content": "Zephyr is an elderly wizard who lives in a tower overlooking the village. He studies ancient magic and sometimes offers his services for those in need. He was once a member of the Order of Arcane Studies but left under mysterious circumstances. He is knowledgeable about magical artifacts and ancient lore. His raven familiar, Shadow, serves as his eyes and ears.",
+      "known_by": ["Zephyr", "villagers", "wizards"],
+      "importance": 0.8,
+      "tags": ["wizard", "magic", "order", "raven", "tower"]
+    },
+    {
+      "id": "ironforge_clan",
+      "title": "The Ironforge Clan",
+      "content": "The Ironforge Clan are the ruling family of Ironhold. Descended from Thrain Ironforge, they are renowned for their craftsmanship and wisdom. The current Clan Lord is Thorin Ironforge, a stern but fair ruler. The clan controls the mithril mines and the greatest forges in the city. Their ancestral hammer, Earthshaker, is said to have been forged by Thrain himself and holds powerful enchantments.",
+      "known_by": ["Thorne", "dwarves", "historians"],
+      "importance": 0.7,
+      "tags": ["dwarves", "ironhold", "royalty", "mithril", "artifact"]
+    },
+    {
+      "id": "bandit_king",
+      "title": "The Bandit King",
+      "content": "A mysterious figure known only as the Bandit King leads a growing force of outlaws in the region. They attack caravans and isolated villages with military precision. Some say he was once a noble who was wronged by the kingdom. His identity remains unknown, as he always wears a mask. A large reward has been offered for his capture.",
+      "known_by": ["Elara", "merchants", "guards"],
+      "importance": 0.7,
+      "tags": ["bandit", "outlaw", "mystery", "reward", "danger"]
+    }
+  ]
+}
