@@ -16,6 +16,7 @@ from pydantic import BaseModel
 
 from npc_dialogue import NPCDialogue, NPCManager
 from relationship_tracking import RelationshipTracker
+from quest_generator import QuestGenerator, QuestManager, QuestType, ObjectiveType
 
 # Initialize FastAPI app
 app = FastAPI(
@@ -36,6 +37,7 @@ app.add_middleware(
 # Global state
 manager: Optional[NPCManager] = None
 relationship_tracker: Optional[RelationshipTracker] = None
+quest_manager: Optional[QuestManager] = None
 CHARACTER_CARDS_DIR = Path("character_cards")
 
 
@@ -111,7 +113,7 @@ class StatusResponse(BaseModel):
 @app.on_event("startup")
 async def startup_event():
     """Initialize the NPC system on server start."""
-    global manager, relationship_tracker
+    global manager, relationship_tracker, quest_manager
     
     # Initialize relationship tracker
     relationship_tracker = RelationshipTracker(save_path="relationship_data")
@@ -120,6 +122,14 @@ async def startup_event():
     manager = NPCManager(
         model="llama3.2:1b",
         relationship_tracker=relationship_tracker
+    )
+    
+    # Initialize quest manager
+    quest_generator = QuestGenerator(relationship_tracker=relationship_tracker)
+    quest_manager = QuestManager(
+        quest_generator=quest_generator,
+        relationship_tracker=relationship_tracker,
+        save_dir="saves"
     )
     
     # Check Ollama connection
@@ -592,6 +602,231 @@ async def import_player_data(data: Dict[str, Any]):
         return {"status": "imported", "player_id": data.get("player_id")}
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Import failed: {str(e)}")
+
+
+# ============================================
+# QUEST SYSTEM ENDPOINTS
+# ============================================
+
+class GenerateQuestsRequest(BaseModel):
+    npc_name: str
+    npc_archetype: Optional[str] = None
+    npc_location: Optional[str] = None
+    player_level: int = 1
+    count: int = 2
+
+
+class QuestProgressRequest(BaseModel):
+    objective_type: str
+    target: str
+    amount: int = 1
+
+
+class QuestInfo(BaseModel):
+    id: str
+    name: str
+    description: str
+    quest_giver: str
+    quest_type: str
+    status: str
+    difficulty: int
+    progress: float
+    objectives: List[Dict[str, Any]]
+    time_remaining: Optional[int]
+
+
+@app.get("/api/quests/npc/{npc_name}")
+async def get_npc_quests(npc_name: str, player_level: int = 1):
+    """Get available quests from an NPC."""
+    if not quest_manager:
+        raise HTTPException(status_code=503, detail="Quest system not initialized")
+    
+    player_state = {"level": player_level}
+    quests = quest_manager.get_available_quests(npc_name, player_state)
+    
+    return {
+        "npc_name": npc_name,
+        "quests": [q.to_dict() for q in quests]
+    }
+
+
+@app.post("/api/quests/generate")
+async def generate_quests(request: GenerateQuestsRequest):
+    """Generate new quests for an NPC."""
+    if not quest_manager:
+        raise HTTPException(status_code=503, detail="Quest system not initialized")
+    
+    npc_data = {}
+    if request.npc_archetype:
+        npc_data["archetype"] = request.npc_archetype
+    if request.npc_location:
+        npc_data["location"] = request.npc_location
+    
+    player_state = {"level": request.player_level}
+    
+    quests = quest_manager.generate_quests_for_npc(
+        npc_name=request.npc_name,
+        npc_data=npc_data,
+        player_state=player_state,
+        count=request.count
+    )
+    
+    return {
+        "status": "generated",
+        "npc_name": request.npc_name,
+        "quests": [q.to_dict() for q in quests]
+    }
+
+
+@app.post("/api/quests/{quest_id}/accept")
+async def accept_quest(quest_id: str):
+    """Accept a quest."""
+    if not quest_manager:
+        raise HTTPException(status_code=503, detail="Quest system not initialized")
+    
+    quest = quest_manager.accept_quest(quest_id)
+    
+    if not quest:
+        raise HTTPException(status_code=404, detail=f"Quest '{quest_id}' not found or not available")
+    
+    return {
+        "status": "accepted",
+        "quest": quest.to_dict()
+    }
+
+
+@app.post("/api/quests/{quest_id}/abandon")
+async def abandon_quest(quest_id: str):
+    """Abandon an active quest."""
+    if not quest_manager:
+        raise HTTPException(status_code=503, detail="Quest system not initialized")
+    
+    success = quest_manager.abandon_quest(quest_id)
+    
+    if not success:
+        raise HTTPException(status_code=404, detail=f"Quest '{quest_id}' not found or not active")
+    
+    return {"status": "abandoned", "quest_id": quest_id}
+
+
+@app.get("/api/quests/active")
+async def get_active_quests():
+    """Get all active quests for the player."""
+    if not quest_manager:
+        raise HTTPException(status_code=503, detail="Quest system not initialized")
+    
+    quests = quest_manager.get_active_quests()
+    
+    return {
+        "count": len(quests),
+        "quests": [q.to_dict() for q in quests]
+    }
+
+
+@app.get("/api/quests/{quest_id}")
+async def get_quest(quest_id: str):
+    """Get details of a specific quest."""
+    if not quest_manager:
+        raise HTTPException(status_code=503, detail="Quest system not initialized")
+    
+    quest = quest_manager.get_quest(quest_id)
+    
+    if not quest:
+        raise HTTPException(status_code=404, detail=f"Quest '{quest_id}' not found")
+    
+    return quest.to_dict()
+
+
+@app.post("/api/quests/{quest_id}/progress")
+async def update_quest_progress(quest_id: str, request: QuestProgressRequest):
+    """Update progress on a quest objective."""
+    if not quest_manager:
+        raise HTTPException(status_code=503, detail="Quest system not initialized")
+    
+    try:
+        obj_type = ObjectiveType(request.objective_type)
+    except ValueError:
+        raise HTTPException(
+            status_code=400, 
+            detail=f"Invalid objective type: {request.objective_type}"
+        )
+    
+    # Update progress on all matching active quests
+    updates = quest_manager.update_progress(obj_type, request.target, request.amount)
+    
+    if quest_id not in updates:
+        raise HTTPException(
+            status_code=404, 
+            detail=f"Quest '{quest_id}' not found or objective doesn't match"
+        )
+    
+    quest = quest_manager.get_quest(quest_id)
+    
+    return {
+        "status": "updated",
+        "quest_id": quest_id,
+        "progress": updates[quest_id],
+        "is_complete": quest.is_complete() if quest else False
+    }
+
+
+@app.post("/api/quests/{quest_id}/complete")
+async def complete_quest(quest_id: str):
+    """Complete a quest and claim rewards."""
+    if not quest_manager:
+        raise HTTPException(status_code=503, detail="Quest system not initialized")
+    
+    rewards = quest_manager.complete_quest(quest_id)
+    
+    if not rewards:
+        quest = quest_manager.get_quest(quest_id)
+        if quest and not quest.is_complete():
+            raise HTTPException(
+                status_code=400, 
+                detail="Quest objectives not complete"
+            )
+        raise HTTPException(status_code=404, detail=f"Quest '{quest_id}' not found or not active")
+    
+    return {
+        "status": "completed",
+        "quest_id": quest_id,
+        "rewards": rewards
+    }
+
+
+@app.get("/api/quests/summary")
+async def get_quest_summary():
+    """Get summary of quest state."""
+    if not quest_manager:
+        raise HTTPException(status_code=503, detail="Quest system not initialized")
+    
+    return quest_manager.get_summary()
+
+
+@app.post("/api/quests/save")
+async def save_quest_data(player_id: str = "player"):
+    """Save quest state to file."""
+    if not quest_manager:
+        raise HTTPException(status_code=503, detail="Quest system not initialized")
+    
+    quest_manager.save(player_id)
+    
+    return {"status": "saved", "player_id": player_id}
+
+
+@app.post("/api/quests/load")
+async def load_quest_data(player_id: str = "player"):
+    """Load quest state from file."""
+    if not quest_manager:
+        raise HTTPException(status_code=503, detail="Quest system not initialized")
+    
+    quest_manager.load(player_id)
+    
+    return {
+        "status": "loaded",
+        "player_id": player_id,
+        "summary": quest_manager.get_summary()
+    }
 
 
 # Run server
