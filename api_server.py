@@ -9,7 +9,7 @@ import asyncio
 from typing import Optional, List, Dict, Any
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi import FastAPI, HTTPException, BackgroundTasks, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
@@ -18,6 +18,8 @@ from npc_dialogue import NPCDialogue, NPCManager
 from relationship_tracking import RelationshipTracker
 from quest_generator import QuestGenerator, QuestManager, QuestType, ObjectiveType
 from voice_synthesis import VoiceSystem, VoiceConfig, VoiceProvider
+from npc_state_manager import NPCStateManager, StateEvent, EventType
+from event_system import EventSystem, EventBroadcaster
 
 # Initialize FastAPI app
 app = FastAPI(
@@ -40,6 +42,7 @@ manager: Optional[NPCManager] = None
 relationship_tracker: Optional[RelationshipTracker] = None
 quest_manager: Optional[QuestManager] = None
 voice_system: Optional[VoiceSystem] = None
+event_system: Optional[EventSystem] = None
 CHARACTER_CARDS_DIR = Path("character_cards")
 
 
@@ -115,7 +118,7 @@ class StatusResponse(BaseModel):
 @app.on_event("startup")
 async def startup_event():
     """Initialize the NPC system on server start."""
-    global manager, relationship_tracker, quest_manager, voice_system
+    global manager, relationship_tracker, quest_manager, voice_system, event_system
     
     # Initialize relationship tracker
     relationship_tracker = RelationshipTracker(save_path="relationship_data")
@@ -141,6 +144,11 @@ async def startup_event():
         default_provider=VoiceProvider.EDGE_TTS
     )
     
+    # Initialize multiplayer event system
+    event_system = EventSystem()
+    await event_system.start()
+    print("✅ Event system started")
+    
     # Check Ollama connection
     try:
         import requests
@@ -153,10 +161,16 @@ async def startup_event():
 @app.on_event("shutdown")
 async def shutdown_event():
     """Save data on server shutdown."""
-    global relationship_tracker
+    global relationship_tracker, event_system
+    
     if relationship_tracker:
         relationship_tracker.save()
         print("💾 Saved relationship data")
+    
+    if event_system:
+        event_system.state_manager.save_state()
+        await event_system.stop()
+        print("💾 Saved state and stopped event system")
 
 
 # Health Check
@@ -1045,6 +1059,255 @@ async def load_voice_profiles():
     return {
         "status": "loaded",
         "profiles_count": len(voice_system.voice_profiles)
+    }
+
+
+# ============================================
+# MULTIPLAYER WEBSOCKET ENDPOINTS
+# ============================================
+
+class ZoneChangeRequest(BaseModel):
+    zone_id: str
+
+
+class DialogueRequest(BaseModel):
+    npc_id: str
+    message: str
+
+
+@app.websocket("/ws/{player_id}")
+async def websocket_endpoint(websocket: WebSocket, player_id: str):
+    """
+    Main WebSocket endpoint for multiplayer connections.
+    
+    Protocol:
+    - Client sends: {"action": "subscribe", "topic": "zone:village"}
+    - Client sends: {"action": "pong"} (response to ping)
+    - Client sends: {"action": "dialogue", "npc_id": "...", "message": "..."}
+    - Server sends: {"type": "event", "event": {...}}
+    - Server sends: {"type": "ping"} (connection health check)
+    """
+    if not event_system:
+        await websocket.close(code=1011, reason="Event system not initialized")
+        return
+    
+    await websocket.accept()
+    
+    subscriber_id = f"{player_id}_{int(time.time() * 1000)}"
+    
+    try:
+        # Connect player
+        subscriber = await event_system.connect_player(
+            subscriber_id=subscriber_id,
+            websocket=websocket,
+            player_id=player_id,
+        )
+        
+        # Main message loop
+        while True:
+            try:
+                data = await websocket.receive_text()
+                message = json.loads(data)
+                
+                action = message.get("action")
+                
+                if action == "subscribe":
+                    topic = message.get("topic")
+                    if topic:
+                        await event_system.broadcaster.subscribe(subscriber_id, topic)
+                
+                elif action == "unsubscribe":
+                    topic = message.get("topic")
+                    if topic:
+                        await event_system.broadcaster.unsubscribe(subscriber_id, topic)
+                
+                elif action == "pong":
+                    await event_system.broadcaster.pong(subscriber_id)
+                
+                elif action == "zone_change":
+                    new_zone = message.get("zone_id")
+                    if new_zone:
+                        await event_system.zone_change(player_id, subscriber_id, new_zone)
+                
+                elif action == "dialogue":
+                    npc_id = message.get("npc_id")
+                    text = message.get("message")
+                    if npc_id and text:
+                        # Add to dialogue history
+                        await event_system.dialogue(
+                            player_id=player_id,
+                            npc_id=npc_id,
+                            role="user",
+                            content=text,
+                        )
+                        
+                        # Generate NPC response (if NPC manager available)
+                        if manager and npc_id in manager.npcs:
+                            npc = manager.npcs[npc_id]
+                            response = npc.generate_response(text)
+                            
+                            # Store and broadcast NPC response
+                            await event_system.dialogue(
+                                player_id=player_id,
+                                npc_id=npc_id,
+                                role="assistant",
+                                content=response,
+                            )
+                            
+                            # Send response directly to player
+                            await websocket.send_json({
+                                "type": "dialogue_response",
+                                "npc_id": npc_id,
+                                "response": response,
+                            })
+                
+                elif action == "quest_accept":
+                    quest_id = message.get("quest_id")
+                    if quest_id:
+                        event = event_system.state_manager.accept_quest(player_id, quest_id)
+                        await event_system.broadcaster.broadcast(event)
+                
+                elif action == "quest_complete":
+                    quest_id = message.get("quest_id")
+                    shared = message.get("shared", True)
+                    if quest_id:
+                        event = event_system.state_manager.complete_quest(player_id, quest_id, shared)
+                        await event_system.broadcaster.broadcast(event)
+                
+                elif action == "relationship_update":
+                    npc_id = message.get("npc_id")
+                    change = message.get("change", 0)
+                    reason = message.get("reason", "")
+                    if npc_id:
+                        event = event_system.state_manager.update_relationship(player_id, npc_id, change, reason)
+                        await event_system.broadcaster.broadcast(event)
+                
+            except json.JSONDecodeError:
+                await websocket.send_json({"type": "error", "message": "Invalid JSON"})
+            except Exception as e:
+                await websocket.send_json({"type": "error", "message": str(e)})
+    
+    except WebSocketDisconnect:
+        await event_system.disconnect_player(subscriber_id, player_id)
+    except Exception as e:
+        print(f"WebSocket error: {e}")
+        await event_system.disconnect_player(subscriber_id, player_id)
+
+
+@app.get("/api/multiplayer/status")
+async def get_multiplayer_status():
+    """Get multiplayer system status."""
+    if not event_system:
+        raise HTTPException(status_code=503, detail="Event system not initialized")
+    
+    return event_system.get_summary()
+
+
+@app.get("/api/multiplayer/players")
+async def get_connected_players():
+    """Get list of connected players."""
+    if not event_system:
+        raise HTTPException(status_code=503, detail="Event system not initialized")
+    
+    players = event_system.state_manager.get_connected_players()
+    
+    return {
+        "count": len(players),
+        "players": [
+            {
+                "player_id": p.player_id,
+                "zone": p.current_zone,
+                "connected_at": p.connected_at,
+            }
+            for p in players
+        ]
+    }
+
+
+@app.get("/api/multiplayer/players/{player_id}")
+async def get_player_state(player_id: str):
+    """Get state for a specific player."""
+    if not event_system:
+        raise HTTPException(status_code=503, detail="Event system not initialized")
+    
+    player = event_system.state_manager.get_player(player_id)
+    
+    if not player:
+        raise HTTPException(status_code=404, detail=f"Player {player_id} not found")
+    
+    return player.to_dict()
+
+
+@app.get("/api/multiplayer/world")
+async def get_world_state():
+    """Get shared world state."""
+    if not event_system:
+        raise HTTPException(status_code=503, detail="Event system not initialized")
+    
+    return event_system.state_manager.world.to_dict()
+
+
+@app.get("/api/multiplayer/npcs")
+async def get_npc_states():
+    """Get all NPC world states."""
+    if not event_system:
+        raise HTTPException(status_code=503, detail="Event system not initialized")
+    
+    return {
+        "npcs": [npc.to_dict() for npc in event_system.state_manager.npcs.values()]
+    }
+
+
+@app.get("/api/multiplayer/npcs/{npc_id}")
+async def get_npc_state(npc_id: str):
+    """Get specific NPC world state."""
+    if not event_system:
+        raise HTTPException(status_code=503, detail="Event system not initialized")
+    
+    npc = event_system.state_manager.get_npc(npc_id)
+    
+    if not npc:
+        raise HTTPException(status_code=404, detail=f"NPC {npc_id} not found")
+    
+    return npc.to_dict()
+
+
+@app.post("/api/multiplayer/npcs/{npc_id}/register")
+async def register_npc(npc_id: str, name: str, zone: str = "default"):
+    """Register an NPC in the world."""
+    if not event_system:
+        raise HTTPException(status_code=503, detail="Event system not initialized")
+    
+    npc = event_system.state_manager.register_npc(npc_id, name, zone)
+    
+    return {
+        "status": "registered",
+        "npc": npc.to_dict()
+    }
+
+
+@app.post("/api/multiplayer/save")
+async def save_multiplayer_state():
+    """Save multiplayer state to disk."""
+    if not event_system:
+        raise HTTPException(status_code=503, detail="Event system not initialized")
+    
+    event_system.state_manager.save_state()
+    
+    return {"status": "saved"}
+
+
+@app.post("/api/multiplayer/load")
+async def load_multiplayer_state():
+    """Load multiplayer state from disk."""
+    if not event_system:
+        raise HTTPException(status_code=503, detail="Event system not initialized")
+    
+    loaded = event_system.state_manager.load_state()
+    
+    return {
+        "status": "loaded" if loaded else "no_save_found",
+        "summary": event_system.state_manager.get_summary()
     }
 
 
