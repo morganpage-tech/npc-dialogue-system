@@ -17,6 +17,7 @@ from pydantic import BaseModel
 from npc_dialogue import NPCDialogue, NPCManager
 from relationship_tracking import RelationshipTracker
 from quest_generator import QuestGenerator, QuestManager, QuestType, ObjectiveType
+from voice_synthesis import VoiceSystem, VoiceConfig, VoiceProvider
 
 # Initialize FastAPI app
 app = FastAPI(
@@ -38,6 +39,7 @@ app.add_middleware(
 manager: Optional[NPCManager] = None
 relationship_tracker: Optional[RelationshipTracker] = None
 quest_manager: Optional[QuestManager] = None
+voice_system: Optional[VoiceSystem] = None
 CHARACTER_CARDS_DIR = Path("character_cards")
 
 
@@ -113,7 +115,7 @@ class StatusResponse(BaseModel):
 @app.on_event("startup")
 async def startup_event():
     """Initialize the NPC system on server start."""
-    global manager, relationship_tracker, quest_manager
+    global manager, relationship_tracker, quest_manager, voice_system
     
     # Initialize relationship tracker
     relationship_tracker = RelationshipTracker(save_path="relationship_data")
@@ -130,6 +132,13 @@ async def startup_event():
         quest_generator=quest_generator,
         relationship_tracker=relationship_tracker,
         save_dir="saves"
+    )
+    
+    # Initialize voice system
+    voice_system = VoiceSystem(
+        cache_dir="voice_cache",
+        output_dir="voice_output",
+        default_provider=VoiceProvider.EDGE_TTS
     )
     
     # Check Ollama connection
@@ -826,6 +835,216 @@ async def load_quest_data(player_id: str = "player"):
         "status": "loaded",
         "player_id": player_id,
         "summary": quest_manager.get_summary()
+    }
+
+
+# ============================================
+# VOICE SYNTHESIS ENDPOINTS
+# ============================================
+
+class SynthesizeRequest(BaseModel):
+    text: str
+    npc_name: Optional[str] = None
+    voice_id: Optional[str] = None
+    provider: Optional[str] = None
+    speed: float = 1.0
+    use_cache: bool = True
+
+
+class RegisterVoiceRequest(BaseModel):
+    npc_name: str
+    voice_id: str
+    provider: str = "edge_tts"
+    speed: float = 1.0
+    pitch: float = 1.0
+
+
+@app.post("/api/voice/synthesize")
+async def synthesize_voice(request: SynthesizeRequest):
+    """Synthesize speech from text."""
+    if not voice_system:
+        raise HTTPException(status_code=503, detail="Voice system not initialized")
+    
+    # Build voice config
+    voice_config = None
+    if request.voice_id:
+        provider = VoiceProvider(request.provider) if request.provider else None
+        voice_config = VoiceConfig(
+            name="Custom",
+            provider=provider or voice_system.default_provider,
+            voice_id=request.voice_id,
+            speed=request.speed,
+        )
+    
+    # Determine provider
+    provider = None
+    if request.provider:
+        try:
+            provider = VoiceProvider(request.provider)
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"Invalid provider: {request.provider}")
+    
+    # Synthesize
+    result = await voice_system.synthesize(
+        text=request.text,
+        npc_name=request.npc_name,
+        voice_config=voice_config,
+        provider=provider,
+        use_cache=request.use_cache,
+    )
+    
+    if not result.success:
+        raise HTTPException(status_code=500, detail=result.error)
+    
+    return {
+        "success": result.success,
+        "audio_path": result.audio_path,
+        "duration_seconds": result.duration_seconds,
+        "provider": result.provider.value,
+        "voice_id": result.voice_id,
+        "cached": result.cached,
+    }
+
+
+@app.get("/api/voice/synthesize/{npc_name}")
+async def synthesize_npc_voice(npc_name: str, text: str):
+    """Synthesize speech for a specific NPC using their registered voice."""
+    if not voice_system:
+        raise HTTPException(status_code=503, detail="Voice system not initialized")
+    
+    result = await voice_system.synthesize(
+        text=text,
+        npc_name=npc_name,
+    )
+    
+    if not result.success:
+        raise HTTPException(status_code=500, detail=result.error)
+    
+    return {
+        "success": result.success,
+        "audio_path": result.audio_path,
+        "duration_seconds": result.duration_seconds,
+        "provider": result.provider.value,
+        "voice_id": result.voice_id,
+        "cached": result.cached,
+    }
+
+
+@app.post("/api/voice/register")
+async def register_npc_voice(request: RegisterVoiceRequest):
+    """Register a voice profile for an NPC."""
+    if not voice_system:
+        raise HTTPException(status_code=503, detail="Voice system not initialized")
+    
+    try:
+        provider = VoiceProvider(request.provider)
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"Invalid provider: {request.provider}")
+    
+    voice_config = VoiceConfig(
+        name=request.npc_name,
+        provider=provider,
+        voice_id=request.voice_id,
+        speed=request.speed,
+        pitch=request.pitch,
+    )
+    
+    voice_system.register_voice(request.npc_name, voice_config)
+    
+    return {
+        "status": "registered",
+        "npc_name": request.npc_name,
+        "voice_id": request.voice_id,
+        "provider": request.provider,
+    }
+
+
+@app.get("/api/voice/profiles")
+async def get_voice_profiles():
+    """Get all registered voice profiles."""
+    if not voice_system:
+        raise HTTPException(status_code=503, detail="Voice system not initialized")
+    
+    return {
+        "profiles": {
+            name: config.to_dict()
+            for name, config in voice_system.voice_profiles.items()
+        }
+    }
+
+
+@app.get("/api/voice/providers")
+async def get_voice_providers():
+    """Get available TTS providers."""
+    if not voice_system:
+        raise HTTPException(status_code=503, detail="Voice system not initialized")
+    
+    return {
+        "providers": voice_system.get_available_providers()
+    }
+
+
+@app.get("/api/voice/voices")
+async def get_available_voices(provider: Optional[str] = None):
+    """Get available voices."""
+    if not voice_system:
+        raise HTTPException(status_code=503, detail="Voice system not initialized")
+    
+    prov = VoiceProvider(provider) if provider else None
+    voices = voice_system.get_available_voices(prov)
+    
+    return {
+        "count": len(voices),
+        "voices": voices
+    }
+
+
+@app.get("/api/voice/audio/{filename}")
+async def get_audio_file(filename: str):
+    """Serve an audio file."""
+    from fastapi.responses import FileResponse
+    
+    # Check cache directory
+    cache_path = Path("voice_cache") / filename
+    if cache_path.exists():
+        return FileResponse(
+            cache_path,
+            media_type="audio/mpeg" if filename.endswith(".mp3") else "audio/wav"
+        )
+    
+    # Check output directory
+    output_path = Path("voice_output") / filename
+    if output_path.exists():
+        return FileResponse(
+            output_path,
+            media_type="audio/mpeg" if filename.endswith(".mp3") else "audio/wav"
+        )
+    
+    raise HTTPException(status_code=404, detail=f"Audio file not found: {filename}")
+
+
+@app.post("/api/voice/profiles/save")
+async def save_voice_profiles():
+    """Save voice profiles to file."""
+    if not voice_system:
+        raise HTTPException(status_code=503, detail="Voice system not initialized")
+    
+    voice_system.save_profiles("voice_profiles.json")
+    
+    return {"status": "saved"}
+
+
+@app.post("/api/voice/profiles/load")
+async def load_voice_profiles():
+    """Load voice profiles from file."""
+    if not voice_system:
+        raise HTTPException(status_code=503, detail="Voice system not initialized")
+    
+    voice_system.load_profiles("voice_profiles.json")
+    
+    return {
+        "status": "loaded",
+        "profiles_count": len(voice_system.voice_profiles)
     }
 
 
