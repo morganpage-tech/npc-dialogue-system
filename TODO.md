@@ -6,7 +6,7 @@ This file tracks the development status and completed features.
 
 ## Current Status
 
-**All Core Features + Quest System + Voice Synthesis + Multiplayer Completed!**
+**All Core Features + Quest System + Voice Synthesis + Multiplayer + NPC-to-NPC Completed!**
 
 - ✅ v1.0.0 - Initial release with core dialogue system
 - ✅ v1.1.0 - Relationship tracking system (Issue #2)
@@ -16,6 +16,48 @@ This file tracks the development status and completed features.
 - ✅ v1.5.0 - Quest Generation System (Phase 5)
 - ✅ v1.6.0 - Voice Synthesis System (Phase 5)
 - ✅ v1.7.0 - Multiplayer NPC Synchronization (Phase 5c)
+- ✅ v1.8.0 - NPC-to-NPC Conversations (Phase 5d)
+
+### Phase 5d: NPC-to-NPC Conversations ✅
+
+**Status:** COMPLETED
+
+**Implementation:**
+- `npc_conversation.py` - Core conversation system (950+ lines)
+  - ConversationTrigger - How conversations start (proximity, scheduled, event, forced)
+  - ConversationState - State machine (idle, starting, active, ending, completed)
+  - ConversationTopic - 10 built-in topics (gossip, trade, weather, quests, etc.)
+  - ConversationExchange - Individual dialogue turns
+  - NPCConversation - Full conversation data structure
+  - ConversationTopicRegistry - Topic management with cooldowns
+  - NPCConversationEngine - LLM-based dialogue generation
+  - ConversationManager - Full conversation lifecycle management
+- Features:
+  - Proximity-based conversations (NPCs near each other)
+  - Relationship-aware topic selection
+  - Turn-by-turn or full conversation execution
+  - Player overhearing support
+  - Topic progression and cooldowns
+  - Location-based NPC grouping
+  - Conversation history and persistence
+- `demo_npc_conversation.py` - Comprehensive demo
+  - 8 demo scenarios
+  - Quick demo mode
+  - CLI arguments for specific demos
+- API endpoints in `api_server.py`:
+  - POST /api/conversations/start - Start NPC conversation
+  - POST /api/conversations/{id}/turn - Run single turn
+  - POST /api/conversations/{id}/run - Run full conversation
+  - POST /api/conversations/{id}/end - End conversation
+  - GET /api/conversations/{id} - Get conversation details
+  - GET /api/conversations - List active conversations
+  - GET /api/conversations/npc/{name} - Get NPC's conversation
+  - GET /api/conversations/location/{loc} - Get conversations at location
+  - POST /api/conversations/proximity/check - Trigger proximity check
+  - POST /api/conversations/location/{npc} - Update NPC location
+  - GET /api/conversations/topics - List available topics
+  - POST /api/conversations/save - Save history
+  - POST /api/conversations/load - Load history
 
 ---
 
@@ -183,6 +225,7 @@ npc-dialogue-system/
 ├── voice_synthesis.py          # Voice synthesis system
 ├── npc_state_manager.py        # Multiplayer state management
 ├── event_system.py             # Real-time event broadcasting
+├── npc_conversation.py         # NPC-to-NPC conversations
 ├── api_server.py               # REST API + WebSocket server
 │
 ├── main.py                     # CLI demo
@@ -192,6 +235,7 @@ npc-dialogue-system/
 ├── demo_quest.py               # Quest system demo
 ├── demo_voice.py               # Voice system demo
 ├── demo_multiplayer.py         # Multiplayer demo
+├── demo_npc_conversation.py    # NPC conversation demo
 │
 ├── character_cards/            # NPC definitions
 │   ├── blacksmith.json
@@ -230,6 +274,7 @@ npc-dialogue-system/
 
 | Version | Date | Features |
 |---------|------|----------|
+| v1.8.0 | 2026-04-14 | NPC-to-NPC conversations |
 | v1.7.0 | 2026-04-13 | Multiplayer NPC synchronization |
 | v1.6.0 | 2026-04-13 | Voice synthesis system |
 | v1.5.0 | 2026-04-13 | Quest generation system |
@@ -246,7 +291,7 @@ npc-dialogue-system/
 Potential features for future development:
 
 ### Phase 5: Advanced Features (Continued)
-- [ ] NPC-to-NPC conversations
+- [x] NPC-to-NPC conversations ✅ v1.8.0
 - [x] Multiplayer NPC synchronization ✅ v1.7.0
 - [ ] Character personality fine-tuning (LoRA)
 
@@ -293,6 +338,9 @@ python demo_voice.py
 
 # Run multiplayer demo
 python demo_multiplayer.py
+
+# Run NPC conversation demo
+python demo_npc_conversation.py
 ```
 
 **Testing:**
@@ -301,7 +349,7 @@ python setup_check.py        # System check
 python test_structure.py     # Structure tests
 ```
 
-**Current Version:** v1.7.0
+**Current Version:** v1.8.0
 
 **Status:** Production Ready for Indie Games
 

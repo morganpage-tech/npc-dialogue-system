@@ -20,6 +20,10 @@ from quest_generator import QuestGenerator, QuestManager, QuestType, ObjectiveTy
 from voice_synthesis import VoiceSystem, VoiceConfig, VoiceProvider
 from npc_state_manager import NPCStateManager, StateEvent, EventType
 from event_system import EventSystem, EventBroadcaster
+from npc_conversation import (
+    ConversationManager, NPCConversationEngine, NPCConversation,
+    ConversationTrigger, ConversationState
+)
 
 # Initialize FastAPI app
 app = FastAPI(
@@ -43,6 +47,7 @@ relationship_tracker: Optional[RelationshipTracker] = None
 quest_manager: Optional[QuestManager] = None
 voice_system: Optional[VoiceSystem] = None
 event_system: Optional[EventSystem] = None
+conversation_manager: Optional[ConversationManager] = None
 CHARACTER_CARDS_DIR = Path("character_cards")
 
 
@@ -1308,6 +1313,330 @@ async def load_multiplayer_state():
     return {
         "status": "loaded" if loaded else "no_save_found",
         "summary": event_system.state_manager.get_summary()
+    }
+
+
+# ============================================
+# NPC-TO-NPC CONVERSATION ENDPOINTS
+# ============================================
+
+class StartNPCConversationRequest(BaseModel):
+    npc1_name: str
+    npc2_name: str
+    trigger: str = "forced"  # forced, proximity, scheduled, event
+    max_turns: int = 6
+    location: Optional[str] = None
+    context: Optional[Dict[str, Any]] = None
+
+
+class NPCConversationResponse(BaseModel):
+    conversation_id: str
+    npc1_name: str
+    npc2_name: str
+    state: str
+    trigger: str
+    location: Optional[str] = None
+
+
+@app.on_event("startup")
+async def init_conversation_manager():
+    """Initialize conversation manager on startup."""
+    global conversation_manager
+    
+    if manager and not conversation_manager:
+        conversation_manager = ConversationManager(
+            npc_manager=manager,
+            relationship_tracker=relationship_tracker
+        )
+        print("✓ Conversation manager initialized")
+
+
+@app.post("/api/conversations/start", response_model=NPCConversationResponse)
+async def start_npc_conversation(request: StartNPCConversationRequest):
+    """Start a conversation between two NPCs."""
+    if not conversation_manager:
+        raise HTTPException(status_code=503, detail="Conversation manager not initialized")
+    
+    # Check NPCs are loaded
+    if request.npc1_name not in manager.npcs:
+        raise HTTPException(status_code=404, detail=f"NPC '{request.npc1_name}' not loaded")
+    if request.npc2_name not in manager.npcs:
+        raise HTTPException(status_code=404, detail=f"NPC '{request.npc2_name}' not loaded")
+    
+    try:
+        trigger = ConversationTrigger(request.trigger)
+    except ValueError:
+        trigger = ConversationTrigger.FORCED
+    
+    try:
+        conversation = conversation_manager.start_conversation(
+            npc1_name=request.npc1_name,
+            npc2_name=request.npc2_name,
+            trigger=trigger,
+            location=request.location,
+            max_turns=request.max_turns,
+            context=request.context
+        )
+        
+        return NPCConversationResponse(
+            conversation_id=conversation.conversation_id,
+            npc1_name=conversation.npc1_name,
+            npc2_name=conversation.npc2_name,
+            state=conversation.state.value,
+            trigger=conversation.trigger.value,
+            location=conversation.location
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/api/conversations/{conversation_id}/turn")
+async def run_conversation_turn(conversation_id: str):
+    """Run a single turn in a conversation."""
+    if not conversation_manager:
+        raise HTTPException(status_code=503, detail="Conversation manager not initialized")
+    
+    exchange = await conversation_manager.run_conversation_turn(conversation_id)
+    
+    if not exchange:
+        raise HTTPException(status_code=404, detail="Conversation not found or not active")
+    
+    conversation = conversation_manager.get_conversation(conversation_id)
+    
+    return {
+        "exchange": {
+            "speaker": exchange.speaker,
+            "listener": exchange.listener,
+            "message": exchange.message,
+            "timestamp": exchange.timestamp,
+            "topic": exchange.topic
+        },
+        "conversation_state": conversation.state.value if conversation else "completed",
+        "current_turn": conversation.current_turn if conversation else 0
+    }
+
+
+@app.post("/api/conversations/{conversation_id}/run")
+async def run_full_conversation(
+    conversation_id: str,
+    turn_delay: float = 2.0,
+    background_tasks: BackgroundTasks = None
+):
+    """Run a complete conversation from start to finish."""
+    if not conversation_manager:
+        raise HTTPException(status_code=503, detail="Conversation manager not initialized")
+    
+    conversation = conversation_manager.get_conversation(conversation_id)
+    if not conversation:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    
+    # Run in background for async execution
+    full_conv = await conversation_manager.run_full_conversation(
+        npc1_name=conversation.npc1_name,
+        npc2_name=conversation.npc2_name,
+        trigger=conversation.trigger,
+        max_turns=conversation.max_turns,
+        turn_delay=turn_delay,
+        location=conversation.location,
+        context=conversation.metadata
+    )
+    
+    return {
+        "conversation_id": full_conv.conversation_id,
+        "state": full_conv.state.value,
+        "duration": full_conv.get_duration(),
+        "exchange_count": len(full_conv.exchanges),
+        "exchanges": [
+            {
+                "speaker": e.speaker,
+                "listener": e.listener,
+                "message": e.message,
+                "topic": e.topic
+            }
+            for e in full_conv.exchanges
+        ]
+    }
+
+
+@app.post("/api/conversations/{conversation_id}/end")
+async def end_conversation(conversation_id: str):
+    """End an active conversation."""
+    if not conversation_manager:
+        raise HTTPException(status_code=503, detail="Conversation manager not initialized")
+    
+    conversation = conversation_manager.end_conversation(conversation_id)
+    
+    if not conversation:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    
+    return {
+        "status": "ended",
+        "conversation_id": conversation.conversation_id,
+        "duration": conversation.get_duration(),
+        "exchanges": len(conversation.exchanges)
+    }
+
+
+@app.get("/api/conversations/{conversation_id}")
+async def get_conversation(conversation_id: str):
+    """Get details of a specific conversation."""
+    if not conversation_manager:
+        raise HTTPException(status_code=503, detail="Conversation manager not initialized")
+    
+    conversation = conversation_manager.get_conversation(conversation_id)
+    
+    if not conversation:
+        # Check history
+        for c in conversation_manager.conversation_history:
+            if c.conversation_id == conversation_id:
+                return c.to_dict()
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    
+    return conversation.to_dict()
+
+
+@app.get("/api/conversations")
+async def list_conversations(
+    location: Optional[str] = None,
+    include_history: bool = False
+):
+    """List all active conversations."""
+    if not conversation_manager:
+        raise HTTPException(status_code=503, detail="Conversation manager not initialized")
+    
+    active = conversation_manager.get_active_conversations(location)
+    
+    result = {
+        "active_count": len(active),
+        "active_conversations": [c.to_dict() for c in active]
+    }
+    
+    if include_history:
+        result["history_count"] = len(conversation_manager.conversation_history)
+        result["history"] = [
+            {
+                "conversation_id": c.conversation_id,
+                "npc1_name": c.npc1_name,
+                "npc2_name": c.npc2_name,
+                "duration": c.get_duration(),
+                "exchanges": len(c.exchanges)
+            }
+            for c in conversation_manager.conversation_history[-20:]
+        ]
+    
+    return result
+
+
+@app.get("/api/conversations/npc/{npc_name}")
+async def get_npc_conversation(npc_name: str):
+    """Get the conversation an NPC is currently in."""
+    if not conversation_manager:
+        raise HTTPException(status_code=503, detail="Conversation manager not initialized")
+    
+    conversation = conversation_manager.get_npc_conversation(npc_name)
+    
+    if not conversation:
+        return {"npc_name": npc_name, "in_conversation": False}
+    
+    return {
+        "npc_name": npc_name,
+        "in_conversation": True,
+        "conversation": conversation.to_dict()
+    }
+
+
+@app.get("/api/conversations/location/{location}")
+async def get_location_conversations(location: str):
+    """Get all conversations at a specific location (for player overhearing)."""
+    if not conversation_manager:
+        raise HTTPException(status_code=503, detail="Conversation manager not initialized")
+    
+    conversations = conversation_manager.get_overhearable_conversations(location)
+    
+    return {
+        "location": location,
+        "conversation_count": len(conversations),
+        "conversations": [c.to_dict() for c in conversations]
+    }
+
+
+@app.post("/api/conversations/proximity/check")
+async def check_proximity_conversations(location: Optional[str] = None):
+    """Check for and start proximity-triggered conversations."""
+    if not conversation_manager:
+        raise HTTPException(status_code=503, detail="Conversation manager not initialized")
+    
+    await conversation_manager.check_proximity_conversations(location)
+    
+    return {
+        "status": "checked",
+        "active_conversations": len(conversation_manager.active_conversations)
+    }
+
+
+@app.post("/api/conversations/location/{npc_name}")
+async def update_npc_location(npc_name: str, location: str):
+    """Update an NPC's location for proximity-based conversations."""
+    if not conversation_manager:
+        raise HTTPException(status_code=503, detail="Conversation manager not initialized")
+    
+    conversation_manager.update_npc_location(npc_name, location)
+    
+    return {
+        "status": "updated",
+        "npc_name": npc_name,
+        "location": location
+    }
+
+
+@app.get("/api/conversations/topics")
+async def list_conversation_topics():
+    """List available conversation topics."""
+    if not conversation_manager:
+        raise HTTPException(status_code=503, detail="Conversation manager not initialized")
+    
+    topics = conversation_manager.engine.topic_registry.topics
+    
+    return {
+        "topic_count": len(topics),
+        "topics": [
+            {
+                "topic_id": t.topic_id,
+                "name": t.name,
+                "description": t.description,
+                "min_relationship": t.min_relationship,
+                "priority": t.priority
+            }
+            for t in topics.values()
+        ]
+    }
+
+
+@app.post("/api/conversations/save")
+async def save_conversation_history():
+    """Save conversation history to disk."""
+    if not conversation_manager:
+        raise HTTPException(status_code=503, detail="Conversation manager not initialized")
+    
+    conversation_manager.save_history("conversation_history/npc_conversations.json")
+    
+    return {
+        "status": "saved",
+        "history_count": len(conversation_manager.conversation_history)
+    }
+
+
+@app.post("/api/conversations/load")
+async def load_conversation_history():
+    """Load conversation history from disk."""
+    if not conversation_manager:
+        raise HTTPException(status_code=503, detail="Conversation manager not initialized")
+    
+    conversation_manager.load_history("conversation_history/npc_conversations.json")
+    
+    return {
+        "status": "loaded",
+        "history_count": len(conversation_manager.conversation_history)
     }
 
 
