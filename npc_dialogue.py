@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import List, Dict, Optional, TYPE_CHECKING
 import requests
 from relationship_tracking import RelationshipTracker, RelationshipLevel
+from llm_providers import create_provider, LLMProvider, OllamaProvider, DEFAULT_MODELS
 
 # Lore system import (optional)
 try:
@@ -44,6 +45,8 @@ class NPCDialogue:
         lore_system: Optional['LoreSystem'] = None,
         connection_pool: Optional['OllamaConnectionPool'] = None,
         use_shared_pool: bool = True,
+        backend: Optional[str] = None,
+        api_key: Optional[str] = None,
     ):
         """
         Initialize an NPC with a character card and model settings.
@@ -90,11 +93,19 @@ class NPCDialogue:
         if use_shared_pool and not connection_pool:
             self._connection_pool = self._get_or_create_shared_pool()
         
-        # Ollama API endpoint (used when no pool)
+        # LLM Provider (Ollama or Groq)
+        self.backend = backend or os.getenv("LLM_BACKEND", "ollama")
+        self._provider = create_provider(
+            backend=self.backend,
+            api_key=api_key,
+            ollama_url="http://localhost:11434",
+        )
+        
+        # Ollama API endpoint (legacy fallback)
         self.api_url = "http://localhost:11434/api/chat"
         
-        # Verify Ollama is running
-        self._check_ollama_connection()
+        # Verify connection
+        self._check_connection()
     
     @classmethod
     def _get_or_create_shared_pool(cls):
@@ -122,22 +133,27 @@ class NPCDialogue:
         with open(path, 'r', encoding='utf-8') as f:
             return json.load(f)
     
-    def _check_ollama_connection(self):
-        """Verify Ollama is running and model is available."""
-        try:
-            response = requests.get("http://localhost:11434/api/tags", timeout=5)
-            models = [m['name'] for m in response.json().get('models', [])]
-            
-            if self.model not in models:
-                print(f"⚠️  Warning: Model '{self.model}' not found in Ollama.")
-                print(f"   Run: ollama pull {self.model}")
-                available = ", ".join(models[:5]) + ("..." if len(models) > 5 else "")
-                print(f"   Available: {available}")
-        except requests.exceptions.ConnectionError:
-            raise ConnectionError(
-                "Ollama is not running! Start it with: ollama serve\n"
-                "Or install: curl -fsSL https://ollama.com/install.sh | sh"
-            )
+    def _check_connection(self):
+        """Verify LLM backend is accessible."""
+        if self.backend == "ollama":
+            try:
+                response = requests.get("http://localhost:11434/api/tags", timeout=5)
+                models = [m['name'] for m in response.json().get('models', [])]
+                
+                if self.model not in models:
+                    print(f"⚠️  Warning: Model '{self.model}' not found in Ollama.")
+                    print(f"   Run: ollama pull {self.model}")
+                    available = ", ".join(models[:5]) + ("..." if len(models) > 5 else "")
+                    print(f"   Available: {available}")
+            except requests.exceptions.ConnectionError:
+                raise ConnectionError(
+                    "Ollama is not running! Start it with: ollama serve\n"
+                    "Or install: curl -fsSL https://ollama.com/install.sh | sh"
+                )
+        elif self.backend == "groq":
+            if not self._provider.check_connection():
+                print(f"⚠️  Warning: Could not verify Groq API connection.")
+                print(f"   Check your GROQ_API_KEY in .env")
     
     def _build_system_prompt(self, game_state: Optional[Dict] = None) -> str:
         """Build the system prompt with character personality and context."""
@@ -169,11 +185,51 @@ IMPORTANT:
             
             prompt += f"\nCurrent relationship level: {rel_level.name}\n"
         
+        # Add quest context if present in game state
+        if game_state:
+            quest_context = self._format_quest_context(game_state)
+            if quest_context:
+                prompt += quest_context
+
         # Add any game state context
         if game_state:
-            prompt += f"\nCURRENT SITUATION:\n{self._format_game_state(game_state)}\n"
+            non_quest_state = {k: v for k, v in game_state.items()
+                              if k not in ("active_quests", "pending_quest")}
+            if non_quest_state:
+                prompt += f"\nCURRENT SITUATION:\n{self._format_game_state(non_quest_state)}\n"
         
         return prompt
+
+    def _format_quest_context(self, game_state: Dict) -> str:
+        """Format quest information for the system prompt."""
+        parts = []
+
+        active_quests = game_state.get("active_quests", [])
+        if active_quests:
+            parts.append("\nQUESTS YOU HAVE GIVEN THIS PLAYER:")
+            for quest in active_quests:
+                name = quest.get("name", "Unknown")
+                qtype = quest.get("quest_type", "")
+                progress = quest.get("progress", 0)
+                is_complete = quest.get("is_complete", False)
+                status = "COMPLETE" if is_complete else f"{progress:.0f}% done"
+                parts.append(f"- {name} ({qtype}): {status}")
+                for obj in quest.get("objectives", []):
+                    cur = obj.get("current", 0)
+                    req = obj.get("required", 1)
+                    desc = obj.get("description", "")
+                    check = "done" if cur >= req else f"{cur}/{req}"
+                    parts.append(f"  Objective: {desc} [{check}]")
+            parts.append("You remember these quests. Reference them naturally if relevant.")
+
+        pending_quest = game_state.get("pending_quest")
+        if pending_quest:
+            parts.append(f"\nYou just offered the player a quest: \"{pending_quest.get('name', '')}\"")
+            parts.append("Wait for their answer before assuming they accepted.")
+
+        if parts:
+            return "\n".join(parts) + "\n"
+        return ""
     
     def _build_system_prompt_with_lore(
         self, 
@@ -250,35 +306,17 @@ IMPORTANT:
         
         start_time = time.time()
         
-        # Prepare request
-        payload = {
-            "model": self.model,
-            "messages": self._format_messages(user_input, game_state),
-            "stream": False,
-            "options": {
-                "temperature": self.temperature,
-                "num_predict": self.max_tokens,
-            }
-        }
-        
         # Generate response
         try:
-            # Use connection pool if available for better performance
-            if self._connection_pool:
-                response = self._connection_pool.post(
-                    "/api/chat",
-                    payload,
-                    timeout=120
-                )
-                response.raise_for_status()
-                result = response.json()
-            else:
-                response = requests.post(self.api_url, json=payload, timeout=120)
-                response.raise_for_status()
-                result = response.json()
+            messages = self._format_messages(user_input, game_state)
+            result = self._provider.generate(
+                messages=messages,
+                model=self.model,
+                temperature=self.temperature,
+                max_tokens=self.max_tokens,
+            )
             
-            # Extract the message
-            npc_response = result['message']['content'].strip()
+            npc_response = result['content']
             
             # Update history
             self.history.append({"role": "user", "content": user_input})
@@ -291,8 +329,7 @@ IMPORTANT:
             elapsed = time.time() - start_time
 
             if show_thinking:
-                # Try to get token count from response (Ollama returns eval_count)
-                tokens = result.get('eval_count', 0)
+                tokens = result['tokens']
                 tps = tokens / elapsed if elapsed > 0 else 0
                 print(f" ✓ ({tokens} tokens, {elapsed:.1f}s, {tps:.1f} tok/s)")
 
@@ -354,6 +391,7 @@ IMPORTANT:
         return {
             "character": self.character_name,
             "model": self.model,
+            "backend": self.backend,
             "turns": turns,
             "npc_words": npc_words,
             "history_size": len(self.history),
@@ -451,6 +489,10 @@ IMPORTANT:
             self.temperature = self.relationship_tracker.get_temperature_adjustment(
                 self.character_name, self.base_temperature
             )
+    
+    @property
+    def provider(self) -> LLMProvider:
+        return self._provider
 
 
 
@@ -462,15 +504,29 @@ class NPCManager:
     
     def __init__(
         self, 
-        model: str = "llama3.2:1b", 
+        model: Optional[str] = None, 
         relationship_tracker: Optional[RelationshipTracker] = None,
-        lore_system: Optional['LoreSystem'] = None
+        lore_system: Optional['LoreSystem'] = None,
+        backend: Optional[str] = None,
+        api_key: Optional[str] = None,
     ):
-        self.model = model
+        self.backend = backend or os.getenv("LLM_BACKEND", "ollama")
+        self.api_key = api_key or os.getenv("GROQ_API_KEY")
+        
+        if model:
+            self.model = model
+        else:
+            self.model = DEFAULT_MODELS.get(self.backend, "llama3.2:1b")
+        
         self.relationship_tracker = relationship_tracker
         self.lore_system = lore_system
         self.npcs: Dict[str, NPCDialogue] = {}
         self.active_npc: Optional[NPCDialogue] = None
+        
+        self._provider = create_provider(
+            backend=self.backend,
+            api_key=self.api_key,
+        )
     
     def load_character(
         self,
@@ -489,6 +545,10 @@ class NPCManager:
             kwargs['relationship_tracker'] = self.relationship_tracker
         if 'lore_system' not in kwargs:
             kwargs['lore_system'] = self.lore_system
+        if 'backend' not in kwargs:
+            kwargs['backend'] = self.backend
+        if 'api_key' not in kwargs:
+            kwargs['api_key'] = self.api_key
         
         npc = NPCDialogue(
             character_name=character_name,

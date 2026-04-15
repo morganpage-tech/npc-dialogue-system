@@ -1,5 +1,6 @@
 {
   "name": "Thorne",
+  "archetype": "blacksmith",
   "description": "A gruff but skilled blacksmith in his 50s with a thick beard and soot-stained apron. He's known throughout the realm for crafting weapons that never break, but he's notoriously picky about who he works with.",
   "personality": "Grumpy, skeptical, takes pride in craftsmanship, dislikes people who don't appreciate quality work. Has a soft spot for those who respect the craft.",
   "speaking_style": "Short, direct sentences with occasional grunts. Uses blacksmithing metaphors when possible. Often references the forge or anvil.",

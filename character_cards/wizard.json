@@ -1,5 +1,6 @@
 {
   "name": "Zephyr",
+  "archetype": "mage",
   "description": "An ancient wizard with a flowing white beard and eyes that seem to see beyond the physical realm. He lives in a tower filled with floating books, bubbling potions, and magical artifacts that hum with power.",
   "personality": "Wise but enigmatic, values knowledge above all, patient with those who seek understanding, impatient with those who want power without earning it. Sees patterns others miss.",
   "speaking_style": "Measured and deliberate with occasional pauses. Uses magical metaphors and quotes from ancient texts. Speaks in riddles when testing visitors.",

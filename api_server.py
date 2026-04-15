@@ -17,6 +17,7 @@ from pydantic import BaseModel
 from npc_dialogue import NPCDialogue, NPCManager
 from relationship_tracking import RelationshipTracker
 from quest_generator import QuestGenerator, QuestManager, QuestType, ObjectiveType
+from quest_extractor import QuestExtractor
 from voice_synthesis import VoiceSystem, VoiceConfig, VoiceProvider
 from npc_state_manager import NPCStateManager, StateEvent, EventType
 from event_system import EventSystem, EventBroadcaster
@@ -49,6 +50,7 @@ app.add_middleware(
 manager: Optional[NPCManager] = None
 relationship_tracker: Optional[RelationshipTracker] = None
 quest_manager: Optional[QuestManager] = None
+quest_extractor: Optional[QuestExtractor] = None
 voice_system: Optional[VoiceSystem] = None
 event_system: Optional[EventSystem] = None
 conversation_manager: Optional[ConversationManager] = None
@@ -70,6 +72,9 @@ class GenerateResponse(BaseModel):
     tokens: int
     elapsed_time: float
     tokens_per_second: float
+    quest_available: Optional[Dict[str, Any]] = None
+    quest_accepted: Optional[str] = None
+    quest_completed: Optional[Dict[str, Any]] = None
 
 
 class LoadCharacterRequest(BaseModel):
@@ -121,14 +126,15 @@ class StatusResponse(BaseModel):
     version: str
     loaded_npcs: List[str]
     model: str
-    ollama_connected: bool
+    backend: str
+    backend_connected: bool
 
 
 # Startup/Shutdown
 @app.on_event("startup")
 async def startup_event():
     """Initialize the NPC system on server start."""
-    global manager, relationship_tracker, quest_manager, voice_system, event_system, performance_manager
+    global manager, relationship_tracker, quest_manager, quest_extractor, voice_system, event_system, performance_manager
     
     # Initialize performance manager FIRST (for connection pooling)
     performance_manager = PerformanceManager(
@@ -150,11 +156,23 @@ async def startup_event():
     # Initialize relationship tracker
     relationship_tracker = RelationshipTracker(save_path="relationship_data")
     
+    # Determine backend from environment
+    backend = os.getenv("LLM_BACKEND", "ollama")
+    groq_api_key = os.getenv("GROQ_API_KEY")
+    
+    if backend == "groq":
+        model = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+    else:
+        model = os.getenv("OLLAMA_MODEL", "llama3.2:1b")
+    
     # Initialize NPC manager
     manager = NPCManager(
-        model="llama3.2:1b",
-        relationship_tracker=relationship_tracker
+        model=model,
+        relationship_tracker=relationship_tracker,
+        backend=backend,
+        api_key=groq_api_key,
     )
+    print(f"✅ NPC manager initialized (backend: {backend}, model: {model})")
     
     # Initialize quest manager
     quest_generator = QuestGenerator(relationship_tracker=relationship_tracker)
@@ -163,6 +181,14 @@ async def startup_event():
         relationship_tracker=relationship_tracker,
         save_dir="saves"
     )
+    
+    # Initialize quest extractor for natural quest detection
+    quest_extractor = QuestExtractor(
+        model=model,
+        backend=backend,
+        api_key=groq_api_key,
+    )
+    print("✅ Quest extractor initialized")
     
     # Initialize voice system
     voice_system = VoiceSystem(
@@ -176,11 +202,14 @@ async def startup_event():
     await event_system.start()
     print("✅ Event system started")
     
-    # Check Ollama connection using the connection pool
-    if performance_manager.connection_pool.is_healthy():
-        print(f"✅ Connected to Ollama (connection pool active)")
+    # Check backend connection
+    if manager._provider.check_connection():
+        print(f"✅ Connected to {backend} backend")
     else:
-        print(f"⚠️  Warning: Could not connect to Ollama. Make sure it's running.")
+        if backend == "ollama":
+            print(f"⚠️  Warning: Could not connect to Ollama. Make sure it's running.")
+        else:
+            print(f"⚠️  Warning: Could not verify {backend} connection. Check your API key.")
 
 
 @app.on_event("shutdown")
@@ -206,12 +235,11 @@ async def shutdown_event():
 @app.get("/api/status", response_model=StatusResponse)
 async def get_status():
     """Get API server status."""
-    ollama_connected = False
+    backend_connected = False
     try:
-        import requests
-        response = requests.get("http://localhost:11434/api/tags", timeout=2)
-        ollama_connected = response.status_code == 200
-    except:
+        if manager and manager._provider:
+            backend_connected = manager._provider.check_connection()
+    except Exception:
         pass
     
     return StatusResponse(
@@ -219,18 +247,64 @@ async def get_status():
         version="1.2.0",
         loaded_npcs=list(manager.npcs.keys()) if manager else [],
         model=manager.model if manager else "unknown",
-        ollama_connected=ollama_connected
+        backend=manager.backend if manager else "unknown",
+        backend_connected=backend_connected
     )
 
 
 # Dialogue Generation
 @app.post("/api/dialogue/generate", response_model=GenerateResponse)
 async def generate_dialogue(request: GenerateRequest):
-    """Generate an NPC response to player input (with caching)."""
+    """Generate an NPC response to player input (with caching + quest detection)."""
     if not manager:
         raise HTTPException(status_code=503, detail="Server not initialized")
     
     import time
+    
+    # --- Quest acceptance/rejection detection ---
+    quest_accepted_id = None
+    quest_completed_data = None
+    
+    if quest_extractor and quest_manager:
+        pending = quest_extractor.get_pending_quest(request.npc_name)
+        if pending:
+            action = quest_extractor.detect_acceptance(
+                player_input=request.player_input,
+                npc_name=request.npc_name,
+                quest=pending,
+            )
+            if action == "accept":
+                accepted = quest_manager.accept_quest(pending.id)
+                if accepted:
+                    quest_accepted_id = pending.id
+            elif action == "reject":
+                pending.abandon()
+                quest_extractor.clear_pending(request.npc_name)
+    
+    # --- Build game_state with active quest context ---
+    game_state = dict(request.game_state) if request.game_state else {}
+    
+    if quest_manager:
+        active_quests = quest_manager.get_active_quests()
+        npc_quests = [q for q in active_quests if q.quest_giver == request.npc_name]
+        if npc_quests:
+            game_state["active_quests"] = [
+                {
+                    "name": q.name,
+                    "quest_type": q.quest_type.value,
+                    "progress": q.progress_percent(),
+                    "is_complete": q.is_complete(),
+                    "objectives": [o.to_dict() for o in q.objectives],
+                }
+                for q in npc_quests
+            ]
+        
+        pending = quest_extractor.get_pending_quest(request.npc_name) if quest_extractor else None
+        if pending:
+            game_state["pending_quest"] = {
+                "name": pending.name,
+                "description": pending.description,
+            }
     
     # Check cache FIRST for instant response
     if performance_manager:
@@ -245,13 +319,15 @@ async def generate_dialogue(request: GenerateRequest):
                 response=cached,
                 npc_name=request.npc_name,
                 tokens=0,
-                elapsed_time=0.001,  # ~1ms cache lookup
-                tokens_per_second=0  # Cached, no generation
+                elapsed_time=0.001,
+                tokens_per_second=0,
+                quest_available=None,
+                quest_accepted=quest_accepted_id,
+                quest_completed=None,
             )
     
     # Load NPC if not already loaded
     if request.npc_name not in manager.npcs:
-        # Try to find character card
         char_path = CHARACTER_CARDS_DIR / f"{request.npc_name.lower()}.json"
         if not char_path.exists():
             raise HTTPException(
@@ -279,7 +355,7 @@ async def generate_dialogue(request: GenerateRequest):
     try:
         response = npc.generate_response(
             request.player_input,
-            game_state=request.game_state,
+            game_state=game_state if game_state else None,
             show_thinking=False
         )
     except Exception as e:
@@ -305,12 +381,39 @@ async def generate_dialogue(request: GenerateRequest):
         )
         performance_manager.record_request(elapsed, tokens, from_cache=False)
     
+    # --- Quest extraction from NPC response ---
+    quest_available_data = None
+    if quest_extractor and quest_manager:
+        active = list(quest_manager.active_quests.values())
+        extracted = quest_extractor.extract_quest(
+            npc_name=request.npc_name,
+            npc_response=response,
+            active_quests=active,
+        )
+        if extracted:
+            quest_manager.register_quest(extracted)
+            quest_available_data = extracted.to_dict()
+    
+    # --- Auto-update TALK_TO_NPC objectives ---
+    if quest_manager:
+        quest_manager.update_progress(ObjectiveType.TALK_TO_NPC, request.npc_name, 1)
+        
+        # Check if any active quests just completed
+        for quest in list(quest_manager.active_quests.values()):
+            if quest.quest_giver == request.npc_name and quest.is_complete():
+                rewards = quest_manager.complete_quest(quest.id)
+                if rewards and quest.id == quest_accepted_id:
+                    quest_completed_data = rewards
+    
     return GenerateResponse(
         response=response,
         npc_name=request.npc_name,
         tokens=tokens,
         elapsed_time=round(elapsed, 2),
-        tokens_per_second=round(tps, 1)
+        tokens_per_second=round(tps, 1),
+        quest_available=quest_available_data,
+        quest_accepted=quest_accepted_id,
+        quest_completed=quest_completed_data,
     )
 
 
@@ -335,47 +438,25 @@ async def generate_dialogue_stream(request: GenerateRequest):
     async def event_generator():
         """Generate SSE events for streaming response."""
         try:
-            # Use Ollama's streaming API
-            import requests as req
-            
             messages = npc._format_messages(request.player_input, request.game_state)
-            
-            payload = {
-                "model": npc.model,
-                "messages": messages,
-                "stream": True,
-                "options": {
-                    "temperature": npc.temperature,
-                    "num_predict": npc.max_tokens,
-                }
-            }
-            
             full_response = ""
             
-            with req.post(
-                "http://localhost:11434/api/chat",
-                json=payload,
-                stream=True,
-                timeout=120
-            ) as response:
-                for line in response.iter_lines():
-                    if line:
-                        data = json.loads(line)
-                        if 'message' in data:
-                            token = data['message'].get('content', '')
-                            if token:
-                                full_response += token
-                                yield f"data: {json.dumps({'token': token})}\n\n"
-                        
-                        if data.get('done', False):
-                            # Update history
-                            npc.history.append({"role": "user", "content": request.player_input})
-                            npc.history.append({"role": "assistant", "content": full_response})
-                            if len(npc.history) > npc.max_history:
-                                npc.history = npc.history[-npc.max_history:]
-                            
-                            yield f"data: {json.dumps({'done': True, 'full_response': full_response})}\n\n"
-                            break
+            for token in npc.provider.generate_stream(
+                messages=messages,
+                model=npc.model,
+                temperature=npc.temperature,
+                max_tokens=npc.max_tokens,
+            ):
+                full_response += token
+                yield f"data: {json.dumps({'token': token})}\n\n"
+            
+            # Update history
+            npc.history.append({"role": "user", "content": request.player_input})
+            npc.history.append({"role": "assistant", "content": full_response})
+            if len(npc.history) > npc.max_history:
+                npc.history = npc.history[-npc.max_history:]
+            
+            yield f"data: {json.dumps({'done': True, 'full_response': full_response})}\n\n"
                             
         except Exception as e:
             yield f"data: {json.dumps({'error': str(e)})}\n\n"
@@ -911,8 +992,116 @@ async def load_quest_data(player_id: str = "player"):
 
 
 # ============================================
-# VOICE SYNTHESIS ENDPOINTS
+# GAME EVENT + QUEST-AWARE DIALOGUE ENDPOINTS
 # ============================================
+
+class GameEventRequest(BaseModel):
+    event_type: str
+    target: str
+    amount: int = 1
+    location: Optional[str] = None
+    player_id: str = "player"
+    player_gold: Optional[int] = None
+    player_health: Optional[int] = None
+
+
+EVENT_TYPE_ALIASES = {
+    "collect": ObjectiveType.COLLECT_ITEM,
+    "collect_item": ObjectiveType.COLLECT_ITEM,
+    "gather": ObjectiveType.COLLECT_ITEM,
+    "pickup": ObjectiveType.COLLECT_ITEM,
+    "kill": ObjectiveType.KILL_TARGET,
+    "kill_target": ObjectiveType.KILL_TARGET,
+    "defeat": ObjectiveType.KILL_TARGET,
+    "reach": ObjectiveType.REACH_LOCATION,
+    "reach_location": ObjectiveType.REACH_LOCATION,
+    "travel": ObjectiveType.REACH_LOCATION,
+    "arrive": ObjectiveType.REACH_LOCATION,
+    "talk": ObjectiveType.TALK_TO_NPC,
+    "talk_to_npc": ObjectiveType.TALK_TO_NPC,
+    "speak": ObjectiveType.TALK_TO_NPC,
+    "deliver": ObjectiveType.DELIVER_ITEM,
+    "deliver_item": ObjectiveType.DELIVER_ITEM,
+    "give": ObjectiveType.DELIVER_ITEM,
+    "escort": ObjectiveType.ESCORT_NPC,
+    "escort_npc": ObjectiveType.ESCORT_NPC,
+    "boss": ObjectiveType.DEFEAT_BOSS,
+    "defeat_boss": ObjectiveType.DEFEAT_BOSS,
+}
+
+
+@app.post("/api/game/event")
+async def handle_game_event(request: GameEventRequest):
+    """
+    Handle a gameplay event and update quest progress.
+    
+    Called by the game engine when the player performs actions like
+    collecting items, killing enemies, reaching locations, etc.
+    This is the canonical way to update quest objectives — NOT dialogue.
+    """
+    if not quest_manager:
+        raise HTTPException(status_code=503, detail="Quest system not initialized")
+    
+    obj_type = EVENT_TYPE_ALIASES.get(request.event_type.lower())
+    if not obj_type:
+        valid = ", ".join(sorted(set(EVENT_TYPE_ALIASES.keys())))
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown event type '{request.event_type}'. Valid types: {valid}"
+        )
+    
+    updates = quest_manager.update_progress(obj_type, request.target, request.amount)
+    
+    completions = []
+    for quest_id in updates:
+        quest = quest_manager.get_quest(quest_id)
+        if quest and quest.is_complete():
+            completions.append({
+                "quest_id": quest_id,
+                "name": quest.name,
+                "rewards": quest.rewards.to_dict(),
+            })
+    
+    return {
+        "status": "processed",
+        "event_type": request.event_type,
+        "target": request.target,
+        "amount": request.amount,
+        "quests_updated": len(updates),
+        "progress_updates": {qid: f"{pct:.0f}%" for qid, pct in updates.items()},
+        "quests_ready_to_complete": completions,
+    }
+
+
+@app.post("/api/dialogue/generate-with-quests", response_model=GenerateResponse)
+async def generate_dialogue_with_quests(request: GenerateRequest):
+    """Generate NPC response with automatic quest context injection."""
+    game_state = dict(request.game_state) if request.game_state else {}
+    
+    if quest_manager:
+        active_quests = quest_manager.get_active_quests()
+        npc_quests = [q for q in active_quests if q.quest_giver == request.npc_name]
+        if npc_quests:
+            game_state["active_quests"] = [
+                {
+                    "name": q.name,
+                    "quest_type": q.quest_type.value,
+                    "progress": q.progress_percent(),
+                    "is_complete": q.is_complete(),
+                    "objectives": [o.to_dict() for o in q.objectives],
+                }
+                for q in npc_quests
+            ]
+        
+        pending = quest_extractor.get_pending_quest(request.npc_name) if quest_extractor else None
+        if pending:
+            game_state["pending_quest"] = {
+                "name": pending.name,
+                "description": pending.description,
+            }
+    
+    request.game_state = game_state if game_state else None
+    return await generate_dialogue(request)
 
 class SynthesizeRequest(BaseModel):
     text: str

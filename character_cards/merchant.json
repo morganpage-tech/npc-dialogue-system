@@ -1,5 +1,6 @@
 {
   "name": "Elara",
+  "archetype": "merchant",
   "description": "An elegant merchant in her 30s with keen eyes and a warm smile. She travels from distant lands bringing exotic goods and knows secrets about every village she visits.",
   "personality": "Cunning but fair, observant, loves a good bargain, respects those who are honest. Has a network of contacts across multiple kingdoms.",
   "speaking_style": "Smooth and persuasive with a slight accent. Uses market metaphors. Always looking for opportunities but treats regular customers well.",

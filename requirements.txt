@@ -13,5 +13,6 @@ chromadb>=0.4.0
 sentence-transformers>=2.2.0
 
 # Optional: Enhanced features
+python-dotenv>=1.0.0
 # websockets>=12.0  # For WebSocket streaming
 # python-multipart>=0.0.6  # For file uploads

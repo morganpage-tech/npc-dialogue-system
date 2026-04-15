@@ -894,6 +894,18 @@ class QuestManager:
         
         return quests
     
+    def register_quest(self, quest: Quest):
+        """
+        Register an extracted or generated quest as available.
+        
+        Idempotent - registering the same quest twice is a no-op.
+        """
+        npc_name = quest.quest_giver
+        self.available_quests.setdefault(npc_name, [])
+        existing_ids = {q.id for q in self.available_quests[npc_name]}
+        if quest.id not in existing_ids:
+            self.available_quests[npc_name].append(quest)
+    
     def accept_quest(self, quest_id: str) -> Optional[Quest]:
         """
         Accept a quest.
@@ -904,12 +916,12 @@ class QuestManager:
         Returns:
             The accepted quest, or None if not found
         """
-        # Find quest in available quests
         for npc_name, quests in self.available_quests.items():
             for quest in quests:
                 if quest.id == quest_id:
                     if quest.accept():
                         self.active_quests[quest_id] = quest
+                        quests.remove(quest)
                         return quest
         return None
     

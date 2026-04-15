@@ -273,6 +273,101 @@ namespace NPCDialogue
         {
             await PostAsync<SaveAllResponse>("/api/save-all", null);
         }
+
+        /// <summary>
+        /// Generate NPC response with automatic quest context injection.
+        /// The server detects quest offers in NPC dialogue and handles acceptance.
+        /// </summary>
+        public async Task<DialogueResponse> GenerateWithQuestsAsync(
+            string npcName,
+            string playerInput,
+            string playerId = null,
+            Dictionary<string, object> gameState = null)
+        {
+            var request = new GenerateRequest
+            {
+                npc_name = npcName,
+                player_input = playerInput,
+                player_id = playerId ?? defaultPlayerId,
+                game_state = gameState
+            };
+
+            try
+            {
+                var response = await PostAsync<DialogueResponse>("/api/dialogue/generate-with-quests", request);
+                OnResponseReceived?.Invoke(response.response);
+                return response;
+            }
+            catch (Exception e)
+            {
+                OnError?.Invoke($"Failed to generate response: {e.Message}");
+                throw;
+            }
+        }
+
+        /// <summary>
+        /// Report a gameplay event to update quest progress.
+        /// Call this when the player collects items, kills enemies, reaches locations, etc.
+        /// This is the canonical way to update quest objectives from gameplay.
+        /// </summary>
+        public async Task<GameEventResponse> ReportGameEventAsync(
+            string eventType,
+            string target,
+            int amount = 1,
+            string location = null,
+            string playerId = null)
+        {
+            var request = new GameEventRequest
+            {
+                event_type = eventType,
+                target = target,
+                amount = amount,
+                location = location,
+                player_id = playerId ?? defaultPlayerId
+            };
+
+            return await PostAsync<GameEventResponse>("/api/game/event", request);
+        }
+
+        /// <summary>
+        /// Get available quests from an NPC.
+        /// </summary>
+        public async Task<QuestListResponse> GetQuestsAsync(string npcName, int playerLevel = 1)
+        {
+            return await GetAsync<QuestListResponse>($"/api/quests/npc/{npcName}?player_level={playerLevel}");
+        }
+
+        /// <summary>
+        /// Accept a quest by ID.
+        /// </summary>
+        public async Task<QuestActionResponse> AcceptQuestAsync(string questId)
+        {
+            return await PostAsync<QuestActionResponse>($"/api/quests/{questId}/accept", null);
+        }
+
+        /// <summary>
+        /// Complete a quest and claim rewards.
+        /// </summary>
+        public async Task<QuestCompleteResponse> CompleteQuestAsync(string questId)
+        {
+            return await PostAsync<QuestCompleteResponse>($"/api/quests/{questId}/complete", null);
+        }
+
+        /// <summary>
+        /// Get all active quests for the player.
+        /// </summary>
+        public async Task<ActiveQuestsResponse> GetActiveQuestsAsync()
+        {
+            return await GetAsync<ActiveQuestsResponse>("/api/quests/active");
+        }
+
+        /// <summary>
+        /// Abandon an active quest.
+        /// </summary>
+        public async Task<QuestActionResponse> AbandonQuestAsync(string questId)
+        {
+            return await PostAsync<QuestActionResponse>($"/api/quests/{questId}/abandon", null);
+        }
         
         /// <summary>
         /// Export all player data for game save.
@@ -670,6 +765,67 @@ namespace NPCDialogue
         public string full_response;
         public string error;
     }
-    
+
+    // Quest System Data Classes
+
+    [Serializable]
+    public class GameEventRequest
+    {
+        public string event_type;
+        public string target;
+        public int amount = 1;
+        public string location;
+        public string player_id;
+    }
+
+    [Serializable]
+    public class GameEventResponse
+    {
+        public string status;
+        public string event_type;
+        public string target;
+        public int amount;
+        public int quests_updated;
+        public Dictionary<string, string> progress_updates;
+        public List<QuestCompletionInfo> quests_ready_to_complete;
+    }
+
+    [Serializable]
+    public class QuestCompletionInfo
+    {
+        public string quest_id;
+        public string name;
+        public Dictionary<string, object> rewards;
+    }
+
+    [Serializable]
+    public class QuestListResponse
+    {
+        public string npc_name;
+        public List<Dictionary<string, object>> quests;
+    }
+
+    [Serializable]
+    public class QuestActionResponse
+    {
+        public string status;
+        public Dictionary<string, object> quest;
+    }
+
+    [Serializable]
+    public class QuestCompleteResponse
+    {
+        public string status;
+        public string quest_id;
+        public Dictionary<string, object> rewards;
+    }
+
+    [Serializable]
+    public class ActiveQuestsResponse
+    {
+        public int count;
+        public List<Dictionary<string, object>> quests;
+    }
+
     #endregion
 }
