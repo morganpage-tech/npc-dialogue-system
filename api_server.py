@@ -24,6 +24,10 @@ from npc_conversation import (
     ConversationManager, NPCConversationEngine, NPCConversation,
     ConversationTrigger, ConversationState
 )
+from performance import (
+    PerformanceManager, ResponseCache, OllamaConnectionPool,
+    BatchProcessor, PerformanceMetrics
+)
 
 # Initialize FastAPI app
 app = FastAPI(
@@ -48,6 +52,7 @@ quest_manager: Optional[QuestManager] = None
 voice_system: Optional[VoiceSystem] = None
 event_system: Optional[EventSystem] = None
 conversation_manager: Optional[ConversationManager] = None
+performance_manager: Optional[PerformanceManager] = None
 CHARACTER_CARDS_DIR = Path("character_cards")
 
 
@@ -123,7 +128,24 @@ class StatusResponse(BaseModel):
 @app.on_event("startup")
 async def startup_event():
     """Initialize the NPC system on server start."""
-    global manager, relationship_tracker, quest_manager, voice_system, event_system
+    global manager, relationship_tracker, quest_manager, voice_system, event_system, performance_manager
+    
+    # Initialize performance manager FIRST (for connection pooling)
+    performance_manager = PerformanceManager(
+        cache_size=2000,
+        cache_ttl=7200,  # 2 hours
+        pool_size=20,    # Connection pool size
+        max_concurrent=10,
+        ollama_url="http://localhost:11434"
+    )
+    print("✅ Performance manager initialized (caching + connection pooling)")
+    
+    # Try to load cached responses
+    try:
+        performance_manager.load_state()
+        print("✅ Loaded cached responses from disk")
+    except:
+        pass
     
     # Initialize relationship tracker
     relationship_tracker = RelationshipTracker(save_path="relationship_data")
@@ -154,23 +176,25 @@ async def startup_event():
     await event_system.start()
     print("✅ Event system started")
     
-    # Check Ollama connection
-    try:
-        import requests
-        response = requests.get("http://localhost:11434/api/tags", timeout=5)
-        print(f"✅ Connected to Ollama")
-    except:
+    # Check Ollama connection using the connection pool
+    if performance_manager.connection_pool.is_healthy():
+        print(f"✅ Connected to Ollama (connection pool active)")
+    else:
         print(f"⚠️  Warning: Could not connect to Ollama. Make sure it's running.")
 
 
 @app.on_event("shutdown")
 async def shutdown_event():
     """Save data on server shutdown."""
-    global relationship_tracker, event_system
+    global relationship_tracker, event_system, performance_manager
     
     if relationship_tracker:
         relationship_tracker.save()
         print("💾 Saved relationship data")
+    
+    if performance_manager:
+        performance_manager.save_state()
+        print("💾 Saved performance cache")
     
     if event_system:
         event_system.state_manager.save_state()
@@ -202,9 +226,28 @@ async def get_status():
 # Dialogue Generation
 @app.post("/api/dialogue/generate", response_model=GenerateResponse)
 async def generate_dialogue(request: GenerateRequest):
-    """Generate an NPC response to player input."""
+    """Generate an NPC response to player input (with caching)."""
     if not manager:
         raise HTTPException(status_code=503, detail="Server not initialized")
+    
+    import time
+    
+    # Check cache FIRST for instant response
+    if performance_manager:
+        cached = performance_manager.get_cached_response(
+            request.npc_name,
+            request.player_input,
+            request.game_state
+        )
+        if cached:
+            performance_manager.record_request(0, 0, from_cache=True)
+            return GenerateResponse(
+                response=cached,
+                npc_name=request.npc_name,
+                tokens=0,
+                elapsed_time=0.001,  # ~1ms cache lookup
+                tokens_per_second=0  # Cached, no generation
+            )
     
     # Load NPC if not already loaded
     if request.npc_name not in manager.npcs:
@@ -231,7 +274,6 @@ async def generate_dialogue(request: GenerateRequest):
     npc = manager.npcs[request.npc_name]
     
     # Generate response
-    import time
     start_time = time.time()
     
     try:
@@ -249,13 +291,24 @@ async def generate_dialogue(request: GenerateRequest):
     elapsed = time.time() - start_time
     
     # Estimate tokens (rough approximation)
-    tokens = len(response.split()) * 1.3  # Rough token estimate
+    tokens = int(len(response.split()) * 1.3)
     tps = tokens / elapsed if elapsed > 0 else 0
+    
+    # Cache the response for future requests
+    if performance_manager:
+        performance_manager.cache_response(
+            request.npc_name,
+            request.player_input,
+            response,
+            request.game_state,
+            metadata={"tokens": tokens, "model": npc.model}
+        )
+        performance_manager.record_request(elapsed, tokens, from_cache=False)
     
     return GenerateResponse(
         response=response,
         npc_name=request.npc_name,
-        tokens=int(tokens),
+        tokens=tokens,
         elapsed_time=round(elapsed, 2),
         tokens_per_second=round(tps, 1)
     )
@@ -1638,6 +1691,282 @@ async def load_conversation_history():
         "status": "loaded",
         "history_count": len(conversation_manager.conversation_history)
     }
+
+
+# ============================================
+# PERFORMANCE OPTIMIZATION ENDPOINTS
+# ============================================
+
+class BatchRequest(BaseModel):
+    requests: List[Dict[str, Any]]  # List of {npc_name, player_input, player_id, game_state}
+
+
+class PreGenerateRequest(BaseModel):
+    npc_name: str
+    npc_type: Optional[str] = None
+
+
+@app.on_event("startup")
+async def init_performance_manager():
+    """Initialize performance manager on startup."""
+    global performance_manager
+    
+    if not performance_manager:
+        performance_manager = PerformanceManager()
+        print("✓ Performance manager initialized")
+
+
+@app.get("/api/performance/stats")
+async def get_performance_stats():
+    """Get comprehensive performance statistics."""
+    if not performance_manager:
+        raise HTTPException(status_code=503, detail="Performance manager not initialized")
+    
+    return performance_manager.get_stats()
+
+
+@app.post("/api/performance/cache/clear")
+async def clear_cache(npc_name: Optional[str] = None):
+    """Clear the response cache."""
+    if not performance_manager:
+        raise HTTPException(status_code=503, detail="Performance manager not initialized")
+    
+    performance_manager.cache.invalidate(npc_name)
+    
+    return {
+        "status": "cleared",
+        "npc_name": npc_name or "all"
+    }
+
+
+@app.post("/api/performance/cache/save")
+async def save_cache():
+    """Save cache to disk."""
+    if not performance_manager:
+        raise HTTPException(status_code=503, detail="Performance manager not initialized")
+    
+    performance_manager.save_state()
+    
+    return {
+        "status": "saved",
+        "cache_size": len(performance_manager.cache._cache)
+    }
+
+
+@app.post("/api/performance/cache/load")
+async def load_cache():
+    """Load cache from disk."""
+    if not performance_manager:
+        raise HTTPException(status_code=503, detail="Performance manager not initialized")
+    
+    performance_manager.load_state()
+    
+    return {
+        "status": "loaded",
+        "cache_size": len(performance_manager.cache._cache)
+    }
+
+
+@app.get("/api/performance/health")
+async def check_health():
+    """Check system health status."""
+    health = {
+        "status": "healthy",
+        "components": {}
+    }
+    
+    # Check Ollama
+    if performance_manager and performance_manager.connection_pool:
+        health["components"]["ollama"] = {
+            "healthy": performance_manager.connection_pool.is_healthy()
+        }
+    
+    # Check manager
+    health["components"]["npc_manager"] = {
+        "healthy": manager is not None,
+        "loaded_npcs": len(manager.npcs) if manager else 0
+    }
+    
+    # Check conversation manager
+    health["components"]["conversation_manager"] = {
+        "healthy": conversation_manager is not None,
+        "active_conversations": len(conversation_manager.active_conversations) if conversation_manager else 0
+    }
+    
+    # Check event system
+    health["components"]["event_system"] = {
+        "healthy": event_system is not None
+    }
+    
+    # Overall status
+    all_healthy = all(
+        c.get("healthy", False) for c in health["components"].values()
+    )
+    health["status"] = "healthy" if all_healthy else "degraded"
+    
+    return health
+
+
+@app.post("/api/performance/batch")
+async def process_batch_requests(request: BatchRequest):
+    """Process multiple NPC requests in parallel."""
+    if not performance_manager:
+        raise HTTPException(status_code=503, detail="Performance manager not initialized")
+    
+    if not manager:
+        raise HTTPException(status_code=503, detail="NPC manager not initialized")
+    
+    async def process_single(req: Dict) -> Dict:
+        """Process a single request."""
+        npc_name = req.get("npc_name")
+        player_input = req.get("player_input")
+        player_id = req.get("player_id", "player")
+        game_state = req.get("game_state")
+        
+        # Check cache first
+        cached = performance_manager.get_cached_response(npc_name, player_input, game_state)
+        if cached:
+            return {
+                "npc_name": npc_name,
+                "response": cached,
+                "from_cache": True
+            }
+        
+        # Get NPC
+        if npc_name not in manager.npcs:
+            return {
+                "npc_name": npc_name,
+                "error": f"NPC '{npc_name}' not loaded",
+                "from_cache": False
+            }
+        
+        npc = manager.npcs[npc_name]
+        
+        # Generate response
+        import time
+        start = time.time()
+        response = npc.generate_response(player_input, game_state)
+        elapsed = time.time() - start
+        
+        # Cache it
+        performance_manager.cache_response(npc_name, player_input, response, game_state)
+        
+        # Record metrics
+        tokens = len(response.split()) * 1.3
+        performance_manager.record_request(elapsed, int(tokens), from_cache=False)
+        
+        return {
+            "npc_name": npc_name,
+            "response": response,
+            "from_cache": False,
+            "generation_time": elapsed
+        }
+    
+    results = await performance_manager.batch_processor.process_batch(
+        request.requests,
+        process_single
+    )
+    
+    return {
+        "total_requests": len(request.requests),
+        "results": results
+    }
+
+
+@app.post("/api/performance/pregenerate")
+async def pregenerate_responses(request: PreGenerateRequest):
+    """Pre-generate common responses for an NPC."""
+    if not performance_manager:
+        raise HTTPException(status_code=503, detail="Performance manager not initialized")
+    
+    performance_manager.optimize_for_npc(request.npc_name, request.npc_type)
+    
+    return {
+        "status": "pregenerated",
+        "npc_name": request.npc_name,
+        "cache_size": len(performance_manager.cache._cache)
+    }
+
+
+@app.post("/api/performance/metrics/reset")
+async def reset_metrics():
+    """Reset all performance metrics."""
+    if not performance_manager:
+        raise HTTPException(status_code=503, detail="Performance manager not initialized")
+    
+    performance_manager.reset_metrics()
+    
+    return {"status": "reset"}
+
+
+@app.get("/api/performance/cache/stats")
+async def get_cache_stats():
+    """Get detailed cache statistics."""
+    if not performance_manager:
+        raise HTTPException(status_code=503, detail="Performance manager not initialized")
+    
+    return performance_manager.cache.get_stats()
+
+
+@app.get("/api/performance/stats")
+async def get_performance_stats():
+    """Get comprehensive performance statistics."""
+    if not performance_manager:
+        raise HTTPException(status_code=503, detail="Performance manager not initialized")
+    
+    return performance_manager.get_stats()
+
+
+@app.get("/api/performance/health")
+async def get_performance_health():
+    """Get performance system health status."""
+    if not performance_manager:
+        return {"status": "not_initialized"}
+    
+    stats = performance_manager.get_stats()
+    cache_stats = stats.get("cache", {})
+    perf_stats = stats.get("performance", {})
+    
+    # Calculate health score
+    cache_hit_rate = float(cache_stats.get("cache_hit_rate", "0%").replace("%", ""))
+    avg_gen_time = float(perf_stats.get("avg_generation_time", "0").replace("s", ""))
+    error_rate = perf_stats.get("errors", 0) / max(perf_stats.get("total_requests", 1), 1) * 100
+    
+    health_score = 100
+    if cache_hit_rate < 30:
+        health_score -= 20
+    if avg_gen_time > 5:
+        health_score -= 15
+    if error_rate > 5:
+        health_score -= 25
+    
+    return {
+        "status": "healthy" if health_score >= 70 else "degraded",
+        "health_score": health_score,
+        "cache_hit_rate": cache_stats.get("cache_hit_rate"),
+        "avg_generation_time": perf_stats.get("avg_generation_time"),
+        "total_requests": perf_stats.get("total_requests"),
+        "error_rate": f"{error_rate:.1f}%",
+        "connection_pool_healthy": stats.get("connection_pool", {}).get("healthy", False),
+        "cache_size": cache_stats.get("cache_size", 0),
+        "recommendations": _get_performance_recommendations(cache_hit_rate, avg_gen_time, error_rate)
+    }
+
+
+def _get_performance_recommendations(cache_hit_rate: float, avg_gen_time: float, error_rate: float) -> list:
+    """Generate performance recommendations."""
+    recommendations = []
+    
+    if cache_hit_rate < 20:
+        recommendations.append("Low cache hit rate. Consider pre-generating common NPC responses.")
+    if avg_gen_time > 3:
+        recommendations.append("Slow generation times. Consider using a smaller/faster model.")
+    if error_rate > 2:
+        recommendations.append("High error rate. Check Ollama connection stability.")
+    if not recommendations:
+        recommendations.append("Performance is optimal!")
+    
+    return recommendations
 
 
 # Run server

@@ -24,7 +24,12 @@ class NPCDialogue:
     """
     An AI-powered NPC that can have conversations with players.
     Uses local LLM (via Ollama) for dialogue generation.
+    
+    Supports optional connection pooling for better performance.
     """
+    
+    # Class-level connection pool for all instances
+    _shared_connection_pool = None
     
     def __init__(
         self,
@@ -37,6 +42,8 @@ class NPCDialogue:
         max_tokens: int = 500,
         relationship_tracker: Optional[RelationshipTracker] = None,
         lore_system: Optional['LoreSystem'] = None,
+        connection_pool: Optional['OllamaConnectionPool'] = None,
+        use_shared_pool: bool = True,
     ):
         """
         Initialize an NPC with a character card and model settings.
@@ -50,6 +57,8 @@ class NPCDialogue:
             temperature: Randomness (0.0-1.0, higher = more creative)
             max_tokens: Maximum response length
             relationship_tracker: Optional RelationshipTracker instance
+            connection_pool: Optional OllamaConnectionPool for connection reuse
+            use_shared_pool: Use class-level shared connection pool
         """
         self.character_name = character_name
         self.model = model
@@ -76,11 +85,37 @@ class NPCDialogue:
         # Lore system (RAG for world knowledge)
         self.lore_system = lore_system
         
-        # Ollama API endpoint
+        # Connection pooling for better performance
+        self._connection_pool = connection_pool
+        if use_shared_pool and not connection_pool:
+            self._connection_pool = self._get_or_create_shared_pool()
+        
+        # Ollama API endpoint (used when no pool)
         self.api_url = "http://localhost:11434/api/chat"
         
         # Verify Ollama is running
         self._check_ollama_connection()
+    
+    @classmethod
+    def _get_or_create_shared_pool(cls):
+        """Get or create the shared connection pool."""
+        if cls._shared_connection_pool is None:
+            try:
+                from performance import OllamaConnectionPool
+                cls._shared_connection_pool = OllamaConnectionPool(
+                    base_url="http://localhost:11434",
+                    pool_size=10,
+                    max_retries=3,
+                    timeout=120
+                )
+            except ImportError:
+                pass
+        return cls._shared_connection_pool
+    
+    @classmethod
+    def set_shared_pool(cls, pool):
+        """Set a shared connection pool for all NPC instances."""
+        cls._shared_connection_pool = pool
     
     def _load_character_card(self, path: str) -> Dict:
         """Load character definition from JSON file."""
@@ -228,9 +263,19 @@ IMPORTANT:
         
         # Generate response
         try:
-            response = requests.post(self.api_url, json=payload, timeout=120)
-            response.raise_for_status()
-            result = response.json()
+            # Use connection pool if available for better performance
+            if self._connection_pool:
+                response = self._connection_pool.post(
+                    "/api/chat",
+                    payload,
+                    timeout=120
+                )
+                response.raise_for_status()
+                result = response.json()
+            else:
+                response = requests.post(self.api_url, json=payload, timeout=120)
+                response.raise_for_status()
+                result = response.json()
             
             # Extract the message
             npc_response = result['message']['content'].strip()
