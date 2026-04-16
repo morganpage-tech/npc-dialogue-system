@@ -194,9 +194,22 @@ IMPORTANT:
         # Add any game state context
         if game_state:
             non_quest_state = {k: v for k, v in game_state.items()
-                              if k not in ("active_quests", "pending_quest")}
+                              if k not in ("active_quests", "pending_quest", "player_inventory", "_inventory_override")}
             if non_quest_state:
                 prompt += f"\nCURRENT SITUATION:\n{self._format_game_state(non_quest_state)}\n"
+        
+        # Add inventory context
+        if game_state and game_state.get("player_inventory"):
+            prompt += f"\nPLAYER'S INVENTORY:\n{self._format_inventory(game_state['player_inventory'])}\n"
+            prompt += (
+                "\nIMPORTANT: The player can only give, trade, or offer items that are listed in their "
+                "inventory above. If they claim to have or offer an item NOT in their inventory, you MUST "
+                "refuse and point out that they don't have it. Stay in character while doing so.\n"
+            )
+        
+        # Add inventory override (server-side detected fraud)
+        if game_state and game_state.get("_inventory_override"):
+            prompt += f"\nCRITICAL: {game_state['_inventory_override']}\n"
         
         return prompt
 
@@ -256,6 +269,18 @@ IMPORTANT:
         formatted = []
         for key, value in game_state.items():
             formatted.append(f"- {key}: {value}")
+        return "\n".join(formatted)
+    
+    def _format_inventory(self, inventory: Dict[str, int]) -> str:
+        """Format player inventory for system prompt."""
+        if not inventory:
+            return "- (empty)"
+        formatted = []
+        for item, qty in inventory.items():
+            if qty == 1:
+                formatted.append(f"- {item}")
+            else:
+                formatted.append(f"- {item} x{qty}")
         return "\n".join(formatted)
     
     def _format_messages(
@@ -449,21 +474,23 @@ IMPORTANT:
             self.character_name, quest_id, success, reward
         )
     
-    def update_from_gift(self, item_name: str, value: float = 5.0) -> Optional[float]:
+    def update_from_gift(self, item_name: str, value: float = 5.0,
+                         player_inventory: Optional[Dict[str, int]] = None) -> Optional[float]:
         """
         Update relationship after giving a gift.
         
         Args:
             item_name: Name of the gifted item
             value: Relationship value of the item
+            player_inventory: Optional inventory to verify the player has the item
             
         Returns:
-            New relationship score, or None if no tracker
+            New relationship score, or None if no tracker or player doesn't have item
         """
         if not self.relationship_tracker:
             return None
         return self.relationship_tracker.update_from_gift(
-            self.character_name, item_name, value
+            self.character_name, item_name, value, player_inventory=player_inventory
         )
     
     def update_from_dialogue(self, dialogue_type: str, sentiment: float = 0.0) -> Optional[float]:

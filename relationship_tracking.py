@@ -194,7 +194,8 @@ class RelationshipTracker:
         
         return self.update_score(npc_name, change, reason)
     
-    def update_from_gift(self, npc_name: str, item_name: str, value: float = 5.0) -> float:
+    def update_from_gift(self, npc_name: str, item_name: str, value: float = 5.0,
+                         player_inventory: Optional[Dict[str, int]] = None) -> Optional[float]:
         """
         Update relationship after giving a gift.
         
@@ -202,10 +203,16 @@ class RelationshipTracker:
             npc_name: Name of the NPC receiving the gift
             item_name: Name of the gifted item
             value: Relationship value of the item
+            player_inventory: Optional inventory to verify the player has the item
             
         Returns:
-            New relationship score
+            New relationship score, or None if player doesn't have the item
         """
+        if player_inventory is not None:
+            from inventory_validation import player_has_item
+            if not player_has_item(player_inventory, item_name):
+                return None
+        
         rel = self.get_relationship(npc_name)
         
         # Track gifts to prevent farming the same item

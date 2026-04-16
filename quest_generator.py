@@ -212,12 +212,21 @@ class Quest:
         remaining = (self.accepted_at + self.time_limit) - time.time()
         return max(0, int(remaining))
     
-    def accept(self) -> bool:
+    def accept(self, player_inventory: Optional[Dict[str, int]] = None) -> bool:
         """Accept the quest."""
         if self.status != QuestStatus.AVAILABLE:
             return False
         if self.is_expired():
             return False
+        if self.required_items and player_inventory is not None:
+            for item in self.required_items:
+                item_lower = item.lower()
+                has_item = any(
+                    item_lower in inv_item.lower() and qty > 0
+                    for inv_item, qty in player_inventory.items()
+                )
+                if not has_item:
+                    return False
         self.status = QuestStatus.ACTIVE
         self.accepted_at = time.time()
         return True
@@ -906,12 +915,13 @@ class QuestManager:
         if quest.id not in existing_ids:
             self.available_quests[npc_name].append(quest)
     
-    def accept_quest(self, quest_id: str) -> Optional[Quest]:
+    def accept_quest(self, quest_id: str, player_inventory: Optional[Dict[str, int]] = None) -> Optional[Quest]:
         """
         Accept a quest.
         
         Args:
             quest_id: ID of the quest to accept
+            player_inventory: Optional inventory dict for required_items check
             
         Returns:
             The accepted quest, or None if not found
@@ -919,7 +929,7 @@ class QuestManager:
         for npc_name, quests in self.available_quests.items():
             for quest in quests:
                 if quest.id == quest_id:
-                    if quest.accept():
+                    if quest.accept(player_inventory=player_inventory):
                         self.active_quests[quest_id] = quest
                         quests.remove(quest)
                         return quest

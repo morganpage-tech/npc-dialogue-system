@@ -105,6 +105,9 @@ class PlayerState:
     # Completed quests (player's record)
     completed_quests: Set[str] = field(default_factory=set)
     
+    # Player inventory
+    inventory: Dict[str, int] = field(default_factory=dict)
+    
     # Session metadata
     metadata: Dict[str, Any] = field(default_factory=dict)
     
@@ -120,6 +123,7 @@ class PlayerState:
             "relationships": self.relationships,
             "active_quests": list(self.active_quests),
             "completed_quests": list(self.completed_quests),
+            "inventory": self.inventory,
             "metadata": self.metadata,
         }
 
@@ -832,6 +836,7 @@ class NPCStateManager:
                 player.relationships = pdata.get("relationships", {})
                 player.active_quests = set(pdata.get("active_quests", []))
                 player.completed_quests = set(pdata.get("completed_quests", []))
+                player.inventory = pdata.get("inventory", {})
                 player.metadata = pdata.get("metadata", {})
                 self.players[pid] = player
             

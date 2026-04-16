@@ -18,6 +18,7 @@ except ImportError:
 from npc_dialogue import NPCDialogue, NPCManager
 from quest_generator import QuestGenerator, QuestManager, QuestType, ObjectiveType
 from quest_extractor import QuestExtractor
+from inventory_validation import validate_inventory_for_input
 
 
 def print_banner():
@@ -43,6 +44,12 @@ def print_help():
     print("  /accept <id>   - Accept a quest")
     print("  /turnin [id]   - Complete a quest (auto-detect if one active)")
     print("  /abandon <id>  - Abandon a quest")
+    print("")
+    print("  🎒 INVENTORY COMMANDS:")
+    print("  /inventory                          - Show current inventory")
+    print("  /inventory add <item> [qty]         - Add item(s) to inventory")
+    print("  /inventory remove <item> [qty]      - Remove item(s) from inventory")
+    print("  /inventory clear                    - Clear inventory")
     print("")
     print("  🎮 GAME EVENT SIMULATION:")
     print("  /do <action> <target> [amount] - Simulate a gameplay event")
@@ -96,7 +103,7 @@ def format_quest_brief(quest):
     return "\n".join(lines)
 
 
-def build_game_state_for_npc(npc_name, quest_manager, quest_extractor):
+def build_game_state_for_npc(npc_name, quest_manager, quest_extractor, player_inventory=None):
     game_state = {}
 
     if quest_manager:
@@ -122,6 +129,9 @@ def build_game_state_for_npc(npc_name, quest_manager, quest_extractor):
                 "description": pending.description,
             }
 
+    if player_inventory:
+        game_state["player_inventory"] = dict(player_inventory)
+
     return game_state if game_state else None
 
 
@@ -141,6 +151,9 @@ def main():
         backend=backend,
     )
     print("✅ Quest system initialized\n")
+
+    # Player inventory for the CLI session
+    player_inventory = {}
 
     # Load all available characters
     character_dir = "character_cards"
@@ -348,6 +361,60 @@ def main():
                         else:
                             print(f"❌ Quest '{quest_id}' not found or not active\n")
 
+                elif cmd == '/inventory':
+                    subcommands = command[1:] if len(command) > 1 else []
+                    if not subcommands:
+                        if player_inventory:
+                            print(f"\n🎒 Inventory ({len(player_inventory)} items):")
+                            for item, qty in sorted(player_inventory.items()):
+                                label = f"{item}" if qty == 1 else f"{item} x{qty}"
+                                print(f"   • {label}")
+                        else:
+                            print("\n🎒 Inventory: (empty)")
+                        print()
+                    elif subcommands[0] == 'add':
+                        if len(subcommands) < 2:
+                            print("Usage: /inventory add <item_name> [quantity]\n")
+                        else:
+                            item_name = ' '.join(subcommands[1:-1]) if len(subcommands) > 2 and not subcommands[-1].isdigit() else subcommands[1]
+                            qty = 1
+                            for token in subcommands[2:]:
+                                try:
+                                    qty = int(token)
+                                    break
+                                except ValueError:
+                                    item_name = ' '.join(subcommands[1:subcommands.index(token) + 1])
+                            player_inventory[item_name] = player_inventory.get(item_name, 0) + qty
+                            print(f"✅ Added {qty}x {item_name} (now {player_inventory[item_name]})\n")
+                    elif subcommands[0] == 'remove':
+                        if len(subcommands) < 2:
+                            print("Usage: /inventory remove <item_name> [quantity]\n")
+                        else:
+                            item_name = ' '.join(subcommands[1:-1]) if len(subcommands) > 2 and not subcommands[-1].isdigit() else subcommands[1]
+                            if item_name not in player_inventory:
+                                print(f"❌ '{item_name}' not in inventory\n")
+                            else:
+                                qty = 1
+                                for token in subcommands[2:]:
+                                    try:
+                                        qty = int(token)
+                                        break
+                                    except ValueError:
+                                        item_name = ' '.join(subcommands[1:subcommands.index(token) + 1])
+                                new_qty = player_inventory[item_name] - qty
+                                if new_qty <= 0:
+                                    del player_inventory[item_name]
+                                    print(f"🗑️  Removed {item_name} (now 0)\n")
+                                else:
+                                    player_inventory[item_name] = new_qty
+                                    print(f"🗑️  Removed {qty}x {item_name} (now {new_qty})\n")
+                    elif subcommands[0] == 'clear':
+                        player_inventory.clear()
+                        print("🗑️  Inventory cleared\n")
+                    else:
+                        print(f"❌ Unknown inventory command: {subcommands[0]}")
+                        print("   Use: /inventory [add|remove|clear]\n")
+
                 elif cmd == '/do':
                     if len(command) < 3:
                         print("Usage: /do <action> <target> [amount]")
@@ -419,8 +486,23 @@ def main():
 
                 # --- Build game state with quest context ---
                 game_state = build_game_state_for_npc(
-                    npc_name, quest_manager, quest_extractor
+                    npc_name, quest_manager, quest_extractor,
+                    player_inventory=player_inventory,
                 )
+
+                # --- Inventory validation ---
+                player_inventory = game_state.get("player_inventory")
+                if player_inventory:
+                    is_valid, missing = validate_inventory_for_input(
+                        user_input, player_inventory
+                    )
+                    if not is_valid:
+                        items_str = ", ".join(f"'{i}'" for i in missing)
+                        game_state["_inventory_override"] = (
+                            f"The player claims to offer {items_str} but they do NOT have "
+                            f"it in their inventory (their inventory: {list(player_inventory.keys())}). "
+                            f"Refuse the offer in character and tell them they don't have that item."
+                        )
 
                 # --- Generate NPC response ---
                 print(f"🤖 {npc_name} is thinking...", end="", flush=True)

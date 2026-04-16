@@ -84,14 +84,16 @@ namespace NPCDialogue
             string npcName,
             string playerInput,
             string playerId = null,
-            Dictionary<string, object> gameState = null)
+            Dictionary<string, object> gameState = null,
+            Dictionary<string, int> playerInventory = null)
         {
             var request = new GenerateRequest
             {
                 npc_name = npcName,
                 player_input = playerInput,
                 player_id = playerId ?? defaultPlayerId,
-                game_state = gameState
+                game_state = gameState,
+                player_inventory = playerInventory
             };
             
             try
@@ -604,6 +606,7 @@ namespace NPCDialogue
         public string player_input;
         public string player_id;
         public Dictionary<string, object> game_state;
+        public Dictionary<string, int> player_inventory;
     }
     
     [Serializable]
@@ -733,6 +736,7 @@ namespace NPCDialogue
         public string currentQuest;
         public int? playerHealth;
         public int? playerGold;
+        public Dictionary<string, int> playerInventory;
     }
     
     [Serializable]

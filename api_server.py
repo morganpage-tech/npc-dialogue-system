@@ -18,6 +18,7 @@ from npc_dialogue import NPCDialogue, NPCManager
 from relationship_tracking import RelationshipTracker
 from quest_generator import QuestGenerator, QuestManager, QuestType, ObjectiveType
 from quest_extractor import QuestExtractor
+from inventory_validation import validate_inventory_for_input
 from voice_synthesis import VoiceSystem, VoiceConfig, VoiceProvider
 from npc_state_manager import NPCStateManager, StateEvent, EventType
 from event_system import EventSystem, EventBroadcaster
@@ -64,6 +65,7 @@ class GenerateRequest(BaseModel):
     player_input: str
     player_id: str = "player"
     game_state: Optional[Dict[str, Any]] = None
+    player_inventory: Optional[Dict[str, int]] = None
 
 
 class GenerateResponse(BaseModel):
@@ -274,7 +276,10 @@ async def generate_dialogue(request: GenerateRequest):
                 quest=pending,
             )
             if action == "accept":
-                accepted = quest_manager.accept_quest(pending.id)
+                accepted = quest_manager.accept_quest(
+                    pending.id,
+                    player_inventory=request.player_inventory,
+                )
                 if accepted:
                     quest_accepted_id = pending.id
             elif action == "reject":
@@ -283,6 +288,9 @@ async def generate_dialogue(request: GenerateRequest):
     
     # --- Build game_state with active quest context ---
     game_state = dict(request.game_state) if request.game_state else {}
+    
+    if request.player_inventory:
+        game_state["player_inventory"] = request.player_inventory
     
     if quest_manager:
         active_quests = quest_manager.get_active_quests()
@@ -348,6 +356,20 @@ async def generate_dialogue(request: GenerateRequest):
     
     # Get the NPC
     npc = manager.npcs[request.npc_name]
+    
+    # --- Inventory validation ---
+    player_inventory = game_state.get("player_inventory")
+    if player_inventory:
+        is_valid, missing = validate_inventory_for_input(
+            request.player_input, player_inventory
+        )
+        if not is_valid:
+            items_str = ", ".join(f"'{i}'" for i in missing)
+            game_state["_inventory_override"] = (
+                f"The player claims to offer {items_str} but they do NOT have "
+                f"it in their inventory (their inventory: {list(player_inventory.keys())}). "
+                f"Refuse the offer in character and tell them they don't have that item."
+            )
     
     # Generate response
     start_time = time.time()
@@ -704,7 +726,8 @@ async def generate_with_game_state(
     time_of_day: Optional[str] = None,
     current_quest: Optional[str] = None,
     player_health: Optional[int] = None,
-    player_gold: Optional[int] = None
+    player_gold: Optional[int] = None,
+    player_inventory: Optional[Dict[str, int]] = None
 ):
     """Generate NPC response with structured game state."""
     game_state = {}
@@ -719,6 +742,8 @@ async def generate_with_game_state(
         game_state["player_health"] = player_health
     if player_gold is not None:
         game_state["player_gold"] = player_gold
+    if player_inventory:
+        game_state["player_inventory"] = player_inventory
     
     request = GenerateRequest(
         npc_name=npc_name,
@@ -1003,6 +1028,7 @@ class GameEventRequest(BaseModel):
     player_id: str = "player"
     player_gold: Optional[int] = None
     player_health: Optional[int] = None
+    player_inventory: Optional[Dict[str, int]] = None
 
 
 EVENT_TYPE_ALIASES = {
