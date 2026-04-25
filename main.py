@@ -491,16 +491,18 @@ def main():
                 )
 
                 # --- Inventory validation ---
-                player_inventory = game_state.get("player_inventory")
-                if player_inventory:
+                player_inv = game_state.get("player_inventory") if game_state else None
+                if player_inv:
                     is_valid, missing = validate_inventory_for_input(
-                        user_input, player_inventory
+                        user_input, player_inv
                     )
                     if not is_valid:
                         items_str = ", ".join(f"'{i}'" for i in missing)
+                        if not game_state:
+                            game_state = {}
                         game_state["_inventory_override"] = (
                             f"The player claims to offer {items_str} but they do NOT have "
-                            f"it in their inventory (their inventory: {list(player_inventory.keys())}). "
+                            f"it in their inventory (their inventory: {list(player_inv.keys())}). "
                             f"Refuse the offer in character and tell them they don't have that item."
                         )
 
