@@ -50,6 +50,15 @@ class EventType(Enum):
     PLAYER_ENTER_ZONE = "player_enter_zone"
     PLAYER_EXIT_ZONE = "player_exit_zone"
 
+    # DM directive events
+    DM_QUEST_SUGGESTION = "dm_quest_suggestion"
+    DM_NPC_DIRECTIVE = "dm_npc_directive"
+    DM_WORLD_EVENT = "dm_world_event"
+    DM_CONVERSATION_TRIGGER = "dm_conversation_trigger"
+    DM_LORE_UPDATE = "dm_lore_update"
+    DM_RELATIONSHIP_OVERRIDE = "dm_relationship_override"
+    DM_RULE_COMPILED = "dm_rule_compiled"
+
 
 @dataclass
 class StateEvent:
