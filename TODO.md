@@ -17,6 +17,57 @@ This file tracks the development status and completed features.
 - ✅ v1.6.0 - Voice Synthesis System (Phase 5)
 - ✅ v1.7.0 - Multiplayer NPC Synchronization (Phase 5c)
 - ✅ v1.8.0 - NPC-to-NPC Conversations (Phase 5d)
+- ✅ v1.9.0 - Dungeon Master AI — Event-Driven Narrative Overseer (Phase 5e)
+
+### Phase 5e: Dungeon Master AI ✅
+
+**Status:** COMPLETED
+
+**Implementation:**
+- `dungeon_master.py` - Core DM class (~1100 lines)
+  - Event-driven narrative overseer that subscribes to game events
+  - Hardcoded fast-path rules for relationship transitions, quest outcomes, faction changes
+  - LLM judgment fallback for ambiguous events
+  - Observation logging and pattern detection
+  - Rule compilation pipeline (patterns → structured rules)
+  - Tension tracking with decay and force-trigger thresholds
+  - Narrative memory compression (arc summaries + event summaries)
+  - Story arc management (create, advance, resolve)
+  - Persistence and auto-save
+- `dm_rule_engine.py` - Compiled Rule DSL interpreter (~575 lines)
+  - Structured JSON rule validation (schema, operators, action whitelist)
+  - Condition matching with 11 operators (eq, neq, gt, lt, gte, lte, in, contains, not_contains, exists, regex)
+  - Action resolution with event placeholder substitution
+  - Rule lifecycle (add, activate, deactivate, delete, eviction)
+  - Circular trigger prevention
+  - Duplicate detection
+  - File-based persistence (active/ and pending/ directories)
+- `npc_dialogue.py` - DM directive support
+  - `set_dm_directive()` - Apply temporary behavioral directives to NPCs
+  - `_get_dm_directive_modifier()` - Auto-expiring prompt modifiers
+  - DM directives injected into system prompts
+- `api_server.py` - Full DM integration
+  - DM initialization in startup, cleanup in shutdown
+  - 6 directive consumer callbacks (quest, npc, world, conversation, lore, relationship)
+  - 12 API endpoints under `/api/dm/`
+- `demo_dungeon_master.py` - Comprehensive demo (5 scenarios)
+- `test_dungeon_master.py` - Unit tests (~35 tests)
+- `test_dm_rule_engine.py` - Rule engine tests (~40 tests)
+- `DUNGEON_MASTER.md` - Complete design documentation
+
+**API Endpoints:**
+- GET /api/dm/status - DM status and narrative state summary
+- GET /api/dm/arcs - List story arcs
+- GET /api/dm/arcs/{id} - Get arc details
+- POST /api/dm/arcs - Create a story arc
+- GET /api/dm/rules - List active and pending rules
+- GET /api/dm/rules/{id} - Get rule details
+- POST /api/dm/rules/{id}/approve - Approve a pending rule
+- POST /api/dm/rules/{id}/deactivate - Deactivate an active rule
+- DELETE /api/dm/rules/{id} - Delete a rule
+- POST /api/dm/trigger - Manually trigger a DM evaluation
+- POST /api/dm/save - Force-save DM state
+- POST /api/dm/reset - Reset DM narrative state
 
 ### Phase 5d: NPC-to-NPC Conversations ✅
 

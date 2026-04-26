@@ -510,7 +510,7 @@ class TestLLMJudgment(unittest.TestCase):
 
     def test_llm_none_directive_no_emission(self):
         self.provider.response = {"directive": "none"}
-        event = make_event(event_type=EventType.QUEST_COMPLETED)
+        event = make_event(event_type=EventType.NPC_STATE_CHANGE)
         run_async(self.dm.handle_event(event))
         self.dm.event_callback.emit.assert_not_called()
 
@@ -522,9 +522,9 @@ class TestLLMJudgment(unittest.TestCase):
                 "directive": "express_joy",
                 "prompt_modifier": "Be happy!",
             },
-            "narrative_reason": "Quest completed",
+            "narrative_reason": "NPC mood shifted",
         }
-        event = make_event(event_type=EventType.QUEST_COMPLETED)
+        event = make_event(event_type=EventType.NPC_STATE_CHANGE)
         run_async(self.dm.handle_event(event))
         self.dm.event_callback.emit.assert_called()
 

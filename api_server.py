@@ -6,6 +6,7 @@ FastAPI REST API for Unity/game engine integration
 import os
 import json
 import asyncio
+import time
 from typing import Optional, List, Dict, Any
 from pathlib import Path
 
@@ -30,6 +31,8 @@ from performance import (
     PerformanceManager, ResponseCache, OllamaConnectionPool,
     BatchProcessor, PerformanceMetrics
 )
+from dungeon_master import DungeonMaster, DungeonMasterConfig
+from dm_rule_engine import DmRuleEngine
 
 # Initialize FastAPI app
 app = FastAPI(
@@ -56,6 +59,8 @@ voice_system: Optional[VoiceSystem] = None
 event_system: Optional[EventSystem] = None
 conversation_manager: Optional[ConversationManager] = None
 performance_manager: Optional[PerformanceManager] = None
+dungeon_master: Optional[DungeonMaster] = None
+dm_rule_engine: Optional[DmRuleEngine] = None
 CHARACTER_CARDS_DIR = Path("character_cards")
 
 
@@ -136,7 +141,7 @@ class StatusResponse(BaseModel):
 @app.on_event("startup")
 async def startup_event():
     """Initialize the NPC system on server start."""
-    global manager, relationship_tracker, quest_manager, quest_extractor, voice_system, event_system, performance_manager
+    global manager, relationship_tracker, quest_manager, quest_extractor, voice_system, event_system, performance_manager, dungeon_master, dm_rule_engine
     
     # Initialize performance manager FIRST (for connection pooling)
     performance_manager = PerformanceManager(
@@ -203,6 +208,34 @@ async def startup_event():
     event_system = EventSystem()
     await event_system.start()
     print("✅ Event system started")
+
+    # Initialize Dungeon Master
+    dm_config = DungeonMasterConfig.from_env()
+    if dm_config.enabled:
+        dm_rule_engine = DmRuleEngine(
+            rules_dir=dm_config.rules_dir,
+            max_active_rules=dm_config.max_active_rules,
+            max_pending_rules=dm_config.max_pending_rules,
+            min_confidence_auto_activate=dm_config.min_confidence_auto_activate,
+        )
+        dm_rule_engine.load_rules()
+
+        dungeon_master = DungeonMaster(
+            state_manager=event_system.state_manager if event_system else None,
+            event_callback=event_system.state_manager.event_callback if event_system else None,
+            rule_engine=dm_rule_engine,
+            config=dm_config,
+        )
+        dungeon_master.load_state()
+
+        event_system.state_manager.on_any_event(dungeon_master.handle_event)
+
+        _register_dm_directive_consumers()
+
+        await dungeon_master.start()
+        print(f"✅ Dungeon Master initialized (model: {dm_config.model})")
+    else:
+        print("ℹ️  Dungeon Master disabled (DM_ENABLED=false)")
     
     # Check backend connection
     if manager._provider.check_connection():
@@ -217,11 +250,15 @@ async def startup_event():
 @app.on_event("shutdown")
 async def shutdown_event():
     """Save data on server shutdown."""
-    global relationship_tracker, event_system, performance_manager
+    global relationship_tracker, event_system, performance_manager, dungeon_master, dm_rule_engine
     
     if relationship_tracker:
         relationship_tracker.save()
         print("💾 Saved relationship data")
+
+    if dungeon_master:
+        await dungeon_master.stop()
+        print("💾 Saved Dungeon Master state")
     
     if performance_manager:
         performance_manager.save_state()
@@ -2182,6 +2219,296 @@ def _get_performance_recommendations(cache_hit_rate: float, avg_gen_time: float,
         recommendations.append("Performance is optimal!")
     
     return recommendations
+
+
+def _register_dm_directive_consumers():
+    if not event_system or not dungeon_master:
+        return
+    cb = event_system.state_manager.event_callback
+    cb.on(EventType.DM_QUEST_SUGGESTION, _handle_dm_quest)
+    cb.on(EventType.DM_NPC_DIRECTIVE, _handle_dm_npc_directive)
+    cb.on(EventType.DM_WORLD_EVENT, _handle_dm_world_event)
+    cb.on(EventType.DM_CONVERSATION_TRIGGER, _handle_dm_conversation)
+    cb.on(EventType.DM_LORE_UPDATE, _handle_dm_lore_update)
+    cb.on(EventType.DM_RELATIONSHIP_OVERRIDE, _handle_dm_relationship)
+
+
+async def _handle_dm_quest(event: StateEvent):
+    params = event.data
+    if not quest_manager:
+        return
+    try:
+        from quest_generator import QuestType
+        quest = quest_manager.generator.create_quest(
+            quest_type=QuestType(params.get("quest_type", "fetch")),
+            npc_name=params.get("npc_name", "Unknown"),
+            title=params.get("title", "DM Suggested Quest"),
+            description=params.get("description", ""),
+        )
+        quest_manager.add_quest(quest, params.get("npc_name", "Unknown"))
+        print(f"DM: Quest suggestion accepted: {params.get('title', 'Unknown')}")
+    except Exception as e:
+        print(f"DM quest suggestion failed: {e}")
+
+
+async def _handle_dm_npc_directive(event: StateEvent):
+    params = event.data
+    npc_name = params.get("npc_name", "")
+    if not manager or npc_name not in manager.npcs:
+        return
+    npc = manager.npcs[npc_name]
+    npc.set_dm_directive(
+        directive=params.get("directive", ""),
+        prompt_modifier=params.get("prompt_modifier", ""),
+        expires_after=params.get("expires_after_events", 5),
+    )
+    print(f"DM: NPC directive applied to {npc_name}: {params.get('directive', '')}")
+
+
+async def _handle_dm_world_event(event: StateEvent):
+    params = event.data
+    zones = params.get("affected_zones", [])
+    for zone in zones:
+        if zone:
+            dungeon_master.state.world_conditions.add(f"{params.get('event_name', 'event')}_{zone}")
+    print(f"DM: World event: {params.get('event_name', 'Unknown')} (severity: {params.get('severity', 'unknown')})")
+
+
+async def _handle_dm_conversation(event: StateEvent):
+    params = event.data
+    if not conversation_manager:
+        return
+    try:
+        trigger = ConversationTrigger.EVENT
+        conversation_manager.start_conversation(
+            npc1_name=params.get("npc1", ""),
+            npc2_name=params.get("npc2", ""),
+            topic=params.get("topic"),
+            trigger=trigger,
+            location=params.get("location"),
+        )
+        print(f"DM: Conversation triggered: {params.get('npc1', '')} <-> {params.get('npc2', '')}")
+    except Exception as e:
+        print(f"DM conversation trigger failed: {e}")
+
+
+async def _handle_dm_lore_update(event: StateEvent):
+    params = event.data
+    try:
+        from lore_system import LoreSystem, LoreEntry
+        if not hasattr(_handle_dm_lore_update, '_lore_system'):
+            _handle_dm_lore_update._lore_system = LoreSystem()
+        _handle_dm_lore_update._lore_system.add_entry(LoreEntry(
+            id=params.get("lore_id", f"dm_{int(time.time())}"),
+            title=params.get("title", ""),
+            content=params.get("content", ""),
+            category=params.get("category", "events"),
+            known_by=params.get("known_by", ["everyone"]),
+            importance=params.get("importance", 0.5),
+        ))
+        print(f"DM: Lore updated: {params.get('title', 'Unknown')}")
+    except Exception as e:
+        print(f"DM lore update failed: {e}")
+
+
+async def _handle_dm_relationship(event: StateEvent):
+    params = event.data
+    if not relationship_tracker:
+        return
+    for change in params.get("changes", []):
+        try:
+            if "npc" in change:
+                relationship_tracker.update_score(
+                    change["npc"], change["delta"], change.get("reason", "dm_override")
+                )
+            elif "faction" in change:
+                relationship_tracker.update_faction(
+                    change["faction"], change["delta"], change.get("reason", "dm_override")
+                )
+        except Exception as e:
+            print(f"DM relationship override failed for {change}: {e}")
+
+
+# ============================================
+# DM API ENDPOINTS
+# ============================================
+
+
+class DmTriggerRequest(BaseModel):
+    event_type: str
+    data: Dict[str, Any] = {}
+    player_id: Optional[str] = None
+    npc_id: Optional[str] = None
+    zone_id: Optional[str] = None
+
+
+class DmArcRequest(BaseModel):
+    title: str
+    description: str = ""
+    involved_npcs: List[str] = []
+    involved_players: List[str] = []
+    resolution_conditions: List[str] = []
+
+
+@app.get("/api/dm/status")
+async def get_dm_status():
+    if not dungeon_master:
+        raise HTTPException(status_code=503, detail="Dungeon Master not initialized")
+    return dungeon_master.get_status()
+
+
+@app.get("/api/dm/arcs")
+async def get_dm_arcs():
+    if not dungeon_master:
+        raise HTTPException(status_code=503, detail="Dungeon Master not initialized")
+    arcs = []
+    for arc_id, arc in dungeon_master.state.active_arcs.items():
+        arcs.append({
+            "arc_id": arc.arc_id,
+            "title": arc.title,
+            "status": arc.status,
+            "involved_npcs": arc.involved_npcs,
+            "tension_level": arc.tension_level,
+            "event_count": len(arc.key_events),
+            "last_event_at": arc.last_event_at,
+        })
+    return {"arcs": arcs}
+
+
+@app.get("/api/dm/arcs/{arc_id}")
+async def get_dm_arc(arc_id: str):
+    if not dungeon_master:
+        raise HTTPException(status_code=503, detail="Dungeon Master not initialized")
+    arc = dungeon_master.state.active_arcs.get(arc_id)
+    if not arc:
+        raise HTTPException(status_code=404, detail=f"Arc '{arc_id}' not found")
+    return arc.to_dict()
+
+
+@app.post("/api/dm/arcs")
+async def create_dm_arc(request: DmArcRequest):
+    if not dungeon_master:
+        raise HTTPException(status_code=503, detail="Dungeon Master not initialized")
+    arc = dungeon_master.create_arc(
+        title=request.title,
+        description=request.description,
+        involved_npcs=request.involved_npcs,
+        involved_players=request.involved_players,
+        resolution_conditions=request.resolution_conditions,
+    )
+    return {"arc_id": arc.arc_id, "status": arc.status}
+
+
+@app.get("/api/dm/rules")
+async def get_dm_rules():
+    if not dungeon_master or not dm_rule_engine:
+        raise HTTPException(status_code=503, detail="Dungeon Master not initialized")
+    active = [
+        {
+            "rule_id": r.get("rule_id"),
+            "rule_name": r.get("rule_name"),
+            "trigger": r.get("trigger", {}).get("event_type"),
+            "priority": r.get("priority", 0),
+            "confidence": r.get("confidence", 0),
+            "times_observed": r.get("times_observed", 0),
+            "created_at": r.get("created_at"),
+        }
+        for r in dm_rule_engine.active_rules
+    ]
+    pending = [
+        {
+            "rule_id": r.get("rule_id"),
+            "rule_name": r.get("rule_name"),
+            "confidence": r.get("confidence", 0),
+            "status": "awaiting_review",
+        }
+        for r in dm_rule_engine.pending_rules
+    ]
+    return {"active": active, "pending": pending}
+
+
+@app.get("/api/dm/rules/{rule_id}")
+async def get_dm_rule(rule_id: str):
+    if not dm_rule_engine:
+        raise HTTPException(status_code=503, detail="Dungeon Master not initialized")
+    rule = dm_rule_engine.get_rule(rule_id)
+    if not rule:
+        raise HTTPException(status_code=404, detail=f"Rule '{rule_id}' not found")
+    return rule
+
+
+@app.post("/api/dm/rules/{rule_id}/approve")
+async def approve_dm_rule(rule_id: str):
+    if not dm_rule_engine:
+        raise HTTPException(status_code=503, detail="Dungeon Master not initialized")
+    ok = dm_rule_engine.activate_rule(rule_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail=f"Pending rule '{rule_id}' not found")
+    import datetime
+    return {"rule_id": rule_id, "status": "active", "activated_at": datetime.datetime.now(datetime.timezone.utc).isoformat()}
+
+
+@app.post("/api/dm/rules/{rule_id}/deactivate")
+async def deactivate_dm_rule(rule_id: str):
+    if not dm_rule_engine:
+        raise HTTPException(status_code=503, detail="Dungeon Master not initialized")
+    ok = dm_rule_engine.deactivate_rule(rule_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail=f"Active rule '{rule_id}' not found")
+    return {"rule_id": rule_id, "status": "inactive"}
+
+
+@app.delete("/api/dm/rules/{rule_id}")
+async def delete_dm_rule(rule_id: str):
+    if not dm_rule_engine:
+        raise HTTPException(status_code=503, detail="Dungeon Master not initialized")
+    ok = dm_rule_engine.delete_rule(rule_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail=f"Rule '{rule_id}' not found")
+    return {"deleted": True, "rule_id": rule_id}
+
+
+@app.post("/api/dm/trigger")
+async def trigger_dm_event(request: DmTriggerRequest):
+    if not dungeon_master:
+        raise HTTPException(status_code=503, detail="Dungeon Master not initialized")
+    try:
+        et = EventType(request.event_type)
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"Unknown event type: {request.event_type}")
+    event = StateEvent(
+        event_type=et,
+        data=request.data,
+        player_id=request.player_id,
+        npc_id=request.npc_id,
+        zone_id=request.zone_id,
+    )
+    await dungeon_master.handle_event(event)
+    return {
+        "triggered": True,
+        "event_type": request.event_type,
+        "total_events_processed": dungeon_master.state.total_events_processed,
+    }
+
+
+@app.post("/api/dm/save")
+async def save_dm_state():
+    if not dungeon_master:
+        raise HTTPException(status_code=503, detail="Dungeon Master not initialized")
+    dungeon_master.save_state()
+    if dm_rule_engine:
+        dm_rule_engine.save_rules()
+    return {"saved": True}
+
+
+@app.post("/api/dm/reset")
+async def reset_dm_state():
+    if not dungeon_master:
+        raise HTTPException(status_code=503, detail="Dungeon Master not initialized")
+    from dungeon_master import NarrativeState
+    dungeon_master.state = NarrativeState()
+    dungeon_master.raw_events = []
+    return {"reset": True}
 
 
 # Run server

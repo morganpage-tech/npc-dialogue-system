@@ -100,6 +100,8 @@ class NPCDialogue:
             api_key=api_key,
             ollama_url="http://localhost:11434",
         )
+
+        self._dm_directive = None
         
         # Ollama API endpoint (legacy fallback)
         self.api_url = "http://localhost:11434/api/chat"
@@ -128,6 +130,23 @@ class NPCDialogue:
         """Set a shared connection pool for all NPC instances."""
         cls._shared_connection_pool = pool
     
+    def set_dm_directive(self, directive: str, prompt_modifier: str, expires_after: int = 5):
+        self._dm_directive = {
+            "directive": directive,
+            "prompt_modifier": prompt_modifier,
+            "expires_after": expires_after,
+            "events_remaining": expires_after,
+        }
+
+    def _get_dm_directive_modifier(self) -> str:
+        if self._dm_directive:
+            modifier = self._dm_directive["prompt_modifier"]
+            self._dm_directive["events_remaining"] -= 1
+            if self._dm_directive["events_remaining"] <= 0:
+                self._dm_directive = None
+            return modifier
+        return ""
+
     def _load_character_card(self, path: str) -> Dict:
         """Load character definition from JSON file."""
         with open(path, 'r', encoding='utf-8') as f:
@@ -210,7 +229,12 @@ IMPORTANT:
         # Add inventory override (server-side detected fraud)
         if game_state and game_state.get("_inventory_override"):
             prompt += f"\nCRITICAL: {game_state['_inventory_override']}\n"
-        
+
+        # Add DM directive if active
+        dm_modifier = self._get_dm_directive_modifier()
+        if dm_modifier:
+            prompt += f"\nDUNGEON MASTER DIRECTIVE:\n{dm_modifier}\n"
+
         return prompt
 
     def _format_quest_context(self, game_state: Dict) -> str:

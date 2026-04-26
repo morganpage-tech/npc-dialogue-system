@@ -355,17 +355,25 @@ class DungeonMaster:
 
         self._update_tension(event)
 
-        event_data = self._event_to_match_data(event)
-        match_result = self.rule_engine.match(event_data, self.state.to_dict())
-
-        if match_result.matched:
-            await self._emit_directive_from_actions(
-                match_result.actions, event, rule_matched=True
-            )
+        hardcoded = self._apply_hardcoded_rules(event)
+        if hardcoded:
+            for directive in hardcoded:
+                await self._emit_raw_directive(
+                    EventType[directive["type"]],
+                    directive["data"],
+                )
         else:
-            await self._llm_judge(event)
+            event_data = self._event_to_match_data(event)
+            match_result = self.rule_engine.match(event_data, self.state.to_dict())
 
-        self._check_tension_threshold()
+            if match_result.matched:
+                await self._emit_directive_from_actions(
+                    match_result.actions, event, rule_matched=True
+                )
+            else:
+                await self._llm_judge(event)
+
+        await self._check_tension_threshold()
 
         self._events_since_compression += 1
         if self._events_since_compression >= self.config.compression_interval:
@@ -865,13 +873,18 @@ Respond with ONLY a JSON object:
             await self._emit_directive(atype, params, event, f"Compiled rule match")
 
     async def _emit_raw_directive(self, event_type: EventType, data: Dict):
+        affected_zones = data.get("affected_zones")
+        zone_id = data.get("zone_id")
+        if not zone_id and isinstance(affected_zones, list) and affected_zones:
+            zone_id = affected_zones[0]
+
         directive_event = StateEvent(
             event_type=event_type,
             timestamp=time.time(),
             data=data,
             player_id=data.get("player_id"),
             npc_id=data.get("npc") or data.get("npc_name"),
-            zone_id=data.get("zone_id") or data.get("affected_zones", [None])[0] if isinstance(data.get("affected_zones"), list) else None,
+            zone_id=zone_id,
         )
         if self.event_callback:
             await self.event_callback.emit(directive_event)
@@ -916,10 +929,39 @@ Respond with ONLY a JSON object:
             overall = sum(self.state.tension_map.values()) / len(self.state.tension_map)
         self.state.tension_map["world:overall"] = max(0.0, min(1.0, overall))
 
-    def _check_tension_threshold(self):
-        for key, value in self.state.tension_map.items():
+    async def _check_tension_threshold(self):
+        for key, value in list(self.state.tension_map.items()):
             if value >= self.config.tension_threshold and key != "world:overall":
-                print(f"DM: Tension threshold exceeded for {key}: {value:.2f}")
+                if key.startswith("npc:"):
+                    npc_name = key[4:]
+                    await self._emit_raw_directive(EventType.DM_WORLD_EVENT, {
+                        "directive_type": "DM_WORLD_EVENT",
+                        "event_name": f"Tension Release: {npc_name}",
+                        "severity": "moderate",
+                        "description": f"Tension with {npc_name} has reached a critical point. Narrative consequences are unfolding.",
+                        "affected_zones": [],
+                        "affected_factions": {},
+                        "duration_hours": 24,
+                        "narrative_reason": f"Tension threshold exceeded for {key}: {value:.2f}",
+                        "source": "dungeon_master",
+                    })
+                    self.state.tension_map[key] = value * 0.5
+                    print(f"DM: Tension threshold exceeded for {key}: {value:.2f}. Force-triggered world event.")
+                elif key.startswith("faction:"):
+                    faction = key[8:]
+                    await self._emit_raw_directive(EventType.DM_WORLD_EVENT, {
+                        "directive_type": "DM_WORLD_EVENT",
+                        "event_name": f"{faction} Unrest",
+                        "severity": "major",
+                        "description": f"The {faction} is in turmoil due to escalating tensions.",
+                        "affected_zones": [],
+                        "affected_factions": {faction: -10},
+                        "duration_hours": 48,
+                        "narrative_reason": f"Tension threshold exceeded for {key}: {value:.2f}",
+                        "source": "dungeon_master",
+                    })
+                    self.state.tension_map[key] = value * 0.5
+                    print(f"DM: Tension threshold exceeded for {key}: {value:.2f}. Force-triggered faction event.")
 
     # ============================================
     # NARRATIVE COMPRESSION
