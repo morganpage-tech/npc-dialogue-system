@@ -228,6 +228,7 @@ class DungeonMasterConfig:
         cfg.min_confidence_auto_activate = float(
             os.getenv("DM_AUTO_ACTIVATE_THRESHOLD", str(cfg.min_confidence_auto_activate))
         )
+        cfg.api_key = os.getenv("DM_API_KEY") or os.getenv("GROQ_API_KEY")
         return cfg
 
 

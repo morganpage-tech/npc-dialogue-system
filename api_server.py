@@ -12,7 +12,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, BackgroundTasks, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, FileResponse, HTMLResponse
 from pydantic import BaseModel
 
 from npc_dialogue import NPCDialogue, NPCManager
@@ -31,8 +31,10 @@ from performance import (
     PerformanceManager, ResponseCache, OllamaConnectionPool,
     BatchProcessor, PerformanceMetrics
 )
+from player_simulation import SimulationEngine, ChronicleStore, SimulationState
 from dungeon_master import DungeonMaster, DungeonMasterConfig
 from dm_rule_engine import DmRuleEngine
+from llm_providers import create_provider
 
 # Initialize FastAPI app
 app = FastAPI(
@@ -61,6 +63,8 @@ conversation_manager: Optional[ConversationManager] = None
 performance_manager: Optional[PerformanceManager] = None
 dungeon_master: Optional[DungeonMaster] = None
 dm_rule_engine: Optional[DmRuleEngine] = None
+simulation_engine: Optional[SimulationEngine] = None
+chronicle_store: Optional[ChronicleStore] = None
 CHARACTER_CARDS_DIR = Path("character_cards")
 
 
@@ -141,7 +145,7 @@ class StatusResponse(BaseModel):
 @app.on_event("startup")
 async def startup_event():
     """Initialize the NPC system on server start."""
-    global manager, relationship_tracker, quest_manager, quest_extractor, voice_system, event_system, performance_manager, dungeon_master, dm_rule_engine
+    global manager, relationship_tracker, quest_manager, quest_extractor, voice_system, event_system, performance_manager, dungeon_master, dm_rule_engine, simulation_engine, chronicle_store
     
     # Initialize performance manager FIRST (for connection pooling)
     performance_manager = PerformanceManager(
@@ -161,7 +165,7 @@ async def startup_event():
         pass
     
     # Initialize relationship tracker
-    relationship_tracker = RelationshipTracker(save_path="relationship_data")
+    relationship_tracker = RelationshipTracker(player_id="player")
     
     # Determine backend from environment
     backend = os.getenv("LLM_BACKEND", "ollama")
@@ -220,11 +224,18 @@ async def startup_event():
         )
         dm_rule_engine.load_rules()
 
+        dm_provider = create_provider(
+            backend=dm_config.backend,
+            api_key=dm_config.api_key or groq_api_key,
+            ollama_url=os.getenv("OLLAMA_URL", "http://localhost:11434"),
+        )
+
         dungeon_master = DungeonMaster(
             state_manager=event_system.state_manager if event_system else None,
             event_callback=event_system.state_manager.event_callback if event_system else None,
             rule_engine=dm_rule_engine,
             config=dm_config,
+            llm_provider=dm_provider,
         )
         dungeon_master.load_state()
 
@@ -236,6 +247,20 @@ async def startup_event():
         print(f"✅ Dungeon Master initialized (model: {dm_config.model})")
     else:
         print("ℹ️  Dungeon Master disabled (DM_ENABLED=false)")
+    
+    # Initialize simulation engine
+    chronicle_store = ChronicleStore(data_dir="chronicle_data")
+    simulation_engine = SimulationEngine(
+        chronicle_store=chronicle_store,
+        npc_manager=manager,
+        relationship_tracker=relationship_tracker,
+        quest_manager=quest_manager,
+        conversation_manager=conversation_manager,
+        lore_system=manager.lore_system if manager else None,
+        event_system=event_system,
+        dm_engine=dungeon_master,
+    )
+    print("✅ Simulation engine initialized")
     
     # Check backend connection
     if manager._provider.check_connection():
@@ -250,7 +275,7 @@ async def startup_event():
 @app.on_event("shutdown")
 async def shutdown_event():
     """Save data on server shutdown."""
-    global relationship_tracker, event_system, performance_manager, dungeon_master, dm_rule_engine
+    global relationship_tracker, event_system, performance_manager, dungeon_master, dm_rule_engine, chronicle_store, simulation_engine
     
     if relationship_tracker:
         relationship_tracker.save()
@@ -268,6 +293,14 @@ async def shutdown_event():
         event_system.state_manager.save_state()
         await event_system.stop()
         print("💾 Saved state and stopped event system")
+    
+    if chronicle_store:
+        chronicle_store.save()
+        print("💾 Saved chronicle data")
+    
+    if simulation_engine and simulation_engine.state.value == "running":
+        simulation_engine.cancel()
+        print("⏹  Cancelled running simulation")
 
 
 # Health Check
@@ -2511,6 +2544,123 @@ async def reset_dm_state():
     return {"reset": True}
 
 
+# ─── Chronicle & Simulation Endpoints ────────────────────────────────────
+
+@app.get("/chronicle")
+async def serve_chronicle():
+    """Serve the live chronicle webpage."""
+    return FileResponse("static/chronicle.html")
+
+
+@app.websocket("/ws/chronicle")
+async def chronicle_websocket(websocket: WebSocket):
+    """WebSocket endpoint for live chronicle updates."""
+    await websocket.accept()
+    
+    if not simulation_engine:
+        await websocket.send_json({"type": "error", "message": "Simulation engine not initialized"})
+        await websocket.close()
+        return
+    
+    simulation_engine.register_websocket(websocket)
+    
+    try:
+        while True:
+            data = await websocket.receive_text()
+            try:
+                msg = json.loads(data)
+                if msg.get("action") == "ping":
+                    await websocket.send_json({"type": "pong"})
+            except json.JSONDecodeError:
+                pass
+    except WebSocketDisconnect:
+        simulation_engine.unregister_websocket(websocket)
+    except Exception:
+        simulation_engine.unregister_websocket(websocket)
+
+
+@app.get("/api/chronicle/state")
+async def get_chronicle_state():
+    """Get full chronicle state (all turns, metadata)."""
+    if not chronicle_store:
+        raise HTTPException(status_code=503, detail="Chronicle store not initialized")
+    return chronicle_store.get_full_state()
+
+
+@app.get("/api/chronicle/turns")
+async def get_chronicle_turns():
+    """Get list of all turn summaries."""
+    if not chronicle_store:
+        raise HTTPException(status_code=503, detail="Chronicle store not initialized")
+    return {"turns": chronicle_store.get_turn_summaries()}
+
+
+@app.get("/api/chronicle/turn/{turn_id}")
+async def get_chronicle_turn(turn_id: str):
+    """Get full detail for a single turn."""
+    if not chronicle_store:
+        raise HTTPException(status_code=503, detail="Chronicle store not initialized")
+    turn = chronicle_store.get_turn(turn_id)
+    if not turn:
+        raise HTTPException(status_code=404, detail=f"Turn '{turn_id}' not found")
+    return turn.to_dict()
+
+
+@app.post("/api/simulation/start")
+async def start_simulation(background_tasks: BackgroundTasks):
+    """Start the player simulation."""
+    global simulation_engine
+    
+    if not simulation_engine:
+        raise HTTPException(status_code=503, detail="Simulation engine not initialized")
+    
+    if simulation_engine.state.value == "running":
+        return {"status": "already_running", "info": simulation_engine.get_status()}
+    
+    if simulation_engine.state.value == "complete":
+        simulation_engine.reset()
+    
+    background_tasks.add_task(_run_simulation_background)
+    
+    return {"status": "running"}
+
+
+async def _run_simulation_background():
+    """Run the simulation as a background task."""
+    try:
+        await simulation_engine.run_simulation(start_session=1, end_session=5)
+    except Exception as e:
+        print(f"Simulation error: {e}")
+        import traceback
+        traceback.print_exc()
+
+
+@app.post("/api/simulation/pause")
+async def pause_simulation():
+    """Pause the running simulation."""
+    if not simulation_engine:
+        raise HTTPException(status_code=503, detail="Simulation engine not initialized")
+    simulation_engine.pause()
+    return {"status": "paused"}
+
+
+@app.post("/api/simulation/resume")
+async def resume_simulation():
+    """Resume a paused simulation."""
+    if not simulation_engine:
+        raise HTTPException(status_code=503, detail="Simulation engine not initialized")
+    simulation_engine.resume()
+    return {"status": "running"}
+
+
+@app.get("/api/simulation/status")
+async def get_simulation_status():
+    """Get current simulation status."""
+    if not simulation_engine:
+        return {"state": "not_initialized"}
+    return simulation_engine.get_status()
+
+
 # Run server
 if __name__ == "__main__":
     import uvicorn
@@ -2518,6 +2668,6 @@ if __name__ == "__main__":
         "api_server:app",
         host="0.0.0.0",
         port=8000,
-        reload=True,
+        reload=False,
         log_level="info"
     )

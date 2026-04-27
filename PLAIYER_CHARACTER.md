@@ -1,6 +1,6 @@
 # Player Character Simulation — "The Chronicle of Kael Ashwood"
 
-> **Status:** Planning
+> **Status:** Implemented
 > **Target Version:** v2.0.0
 > **Dependencies:** All systems (dialogue, relationships, lore, quests, DM, NPC-to-NPC, multiplayer, events)
 > **Output:** A book-like narrative chronicle readable as a fantasy novel
@@ -1160,34 +1160,114 @@ The demo runs through all 5 sessions sequentially, producing the complete chroni
 
 ### New Files
 
-| File | Estimated Lines | Description |
-|------|----------------|-------------|
-| `player_simulation.py` | 600-800 | Core simulation engine: PlayerLLM, NarratorLLM, SimulationLoop |
-| `demo_player_simulation.py` | 300-400 | Full 5-session demo with CLI arguments |
-| `test_player_simulation.py` | 300-400 | Tests for simulation engine |
+| File | Lines | Description |
+|------|-------|-------------|
+| `player_simulation.py` | ~900 | Core simulation engine: PlayerLLM, NarratorLLM, SimulationEngine, ChronicleStore, session plans |
+| `static/chronicle.html` | ~1200 | Live-updating single-page chronicle viewer (vanilla HTML/CSS/JS) |
 | `PLAIYER_CHARACTER.md` | This file | Player character and simulation design |
 
-### Output Files (Generated)
+### Generated at Runtime
 
 | File | Description |
 |------|-------------|
-| `chronicle_of_kael_ashwood.md` | The book-like narrative (22,000-28,000 words) |
-| `simulation_system_log.json` | Detailed system-level event log |
-| `simulation_state/` | Per-session save states for replay/resumption |
+| `chronicle_data/chronicle_state.json` | Full chronicle state (all turns, metadata) |
+| `chronicle_data/session_N.json` | Per-session turn data |
 
 ### Modified Files
 
 | File | Change Description |
 |------|-------------------|
-| `api_server.py` | Add simulation control endpoints (`POST /api/simulation/start`, `GET /api/simulation/status`) |
-| `TODO.md` | Add Phase 6 entry for Player Simulation |
+| `api_server.py` | +9 endpoints: chronicle page, WebSocket, simulation control, state APIs |
 
-### Estimated Total
+### How to Run
 
-- **New code:** ~1,200-1,600 lines (Python)
-- **Tests:** ~300-400 lines
-- **Demo:** ~300-400 lines
-- **Generated chronicle:** ~22,000-28,000 words
+```bash
+# Terminal 1: Start the server
+python api_server.py
+
+# Browser: Open the chronicle
+open http://localhost:8000/chronicle
+
+# Click "Begin Chronicle" in the browser, or via API:
+curl -X POST http://localhost:8000/api/simulation/start
+```
+
+---
+
+## 13. Web Chronicle Architecture
+
+### Live Update Flow
+
+```
+User clicks "Begin Chronicle"
+        │
+        ▼
+POST /api/simulation/start
+        │
+        ▼
+SimulationEngine.run_simulation() starts as background task
+        │
+        ├── For each turn:
+        │     1. PlayerLLM.decide() → Kael's action
+        │     2. Execute action through game subsystems
+        │     3. NarratorLLM.narrate() → prose
+        │     4. ChronicleStore.add_turn()
+        │     5. WebSocket broadcast → browser
+        │
+        ▼
+Browser receives { type: "chronicle_update", turn: {...} }
+        │
+        ├── Appends prose to article (fade-in animation)
+        ├── Updates relationship bars
+        ├── Updates active quests
+        ├── Updates location and stats
+        └── Auto-scrolls to bottom
+```
+
+### WebSocket Protocol
+
+| Message Type | Direction | Payload |
+|-------------|-----------|---------|
+| `chronicle_update` | Server→Client | Full turn data (prose, dialogue, DM events, relationships, quests) |
+| `session_start` | Server→Client | Session number, title, opening prose |
+| `session_end` | Server→Client | Session number |
+| `simulation_start` | Server→Client | Total sessions |
+| `simulation_complete` | Server→Client | Final stats |
+| `ping` | Client→Server | Keep-alive |
+| `pong` | Server→Client | Keep-alive response |
+
+### API Endpoints
+
+| Endpoint | Method | Purpose |
+|----------|--------|---------|
+| `/chronicle` | GET | Serve the chronicle HTML page |
+| `/ws/chronicle` | WebSocket | Live event stream |
+| `/api/chronicle/state` | GET | Full state snapshot (all turns) |
+| `/api/chronicle/turns` | GET | Turn summaries list |
+| `/api/chronicle/turn/{id}` | GET | Single turn detail |
+| `/api/simulation/start` | POST | Start simulation (runs in background) |
+| `/api/simulation/pause` | POST | Pause simulation |
+| `/api/simulation/resume` | POST | Resume simulation |
+| `/api/simulation/status` | GET | Current status |
+
+### Expandable Detail Panels
+
+The chronicle page renders prose first. Inline badges appear next to events:
+
+| Badge | Color | Expands to show |
+|-------|-------|-----------------|
+| `show conversation` | Blue | Full NPC dialogue transcript (player + NPC lines) |
+| `DM event` | Purple | DM directive type, reasoning, rule matched |
+| `quest` | Green | Quest card: name, type, objectives, status, rewards |
+| `relationship` | Amber | Before/after relationship scores, threshold crossings |
+
+### Frontend Stack
+
+- **Vanilla HTML + CSS + JS** — single file, no build tools, no npm
+- **WebSocket** for live updates (reuses existing event system)
+- **Fetch API** for initial state hydration on page refresh
+- **CSS animations** for fade-in prose
+- **Responsive layout** — two-column desktop, stacked mobile
 
 ---
 

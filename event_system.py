@@ -297,7 +297,7 @@ class EventBroadcaster:
         targets.update(self._all_subscribers)
         
         # Event type subscribers
-        targets.update(self._type_subscribers.get(event.event_type.value, set()))
+        targets.update(self._type_subscriptions.get(event.event_type.value, set()))
         
         # Player-specific
         if event.player_id:

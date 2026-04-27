@@ -748,5 +748,94 @@ class TestStartup(unittest.TestCase):
             shutil.rmtree(tmpdir, ignore_errors=True)
 
 
+class TestDmEnvIntegration(unittest.TestCase):
+    """Integration tests for DM config reading from env and LLM provider wiring."""
+
+    def test_from_env_reads_api_key(self):
+        env = {
+            "DM_ENABLED": "true",
+            "DM_BACKEND": "groq",
+            "DM_API_KEY": "gsk_test_key_12345",
+            "DM_MODEL": "llama-3.3-70b-versatile",
+        }
+        with patch.dict(os.environ, env, clear=False):
+            cfg = DungeonMasterConfig.from_env()
+            self.assertEqual(cfg.api_key, "gsk_test_key_12345")
+            self.assertEqual(cfg.backend, "groq")
+
+    def test_from_env_falls_back_to_groq_api_key(self):
+        env = {
+            "DM_ENABLED": "true",
+            "DM_BACKEND": "groq",
+            "GROQ_API_KEY": "gsk_fallback_key_99999",
+        }
+        with patch.dict(os.environ, env, clear=False):
+            # Remove DM_API_KEY if it exists to test fallback
+            with patch.dict(os.environ, {}, clear=False):
+                os.environ.pop("DM_API_KEY", None)
+                cfg = DungeonMasterConfig.from_env()
+                self.assertEqual(cfg.api_key, "gsk_fallback_key_99999")
+
+    def test_from_env_reads_all_dm_vars(self):
+        env = {
+            "DM_ENABLED": "false",
+            "DM_BACKEND": "groq",
+            "DM_MODEL": "test-model",
+            "DM_TEMPERATURE": "0.3",
+            "DM_MAX_RULES": "30",
+            "DM_MIN_OBSERVATIONS": "3",
+            "DM_AUTO_ACTIVATE_THRESHOLD": "0.8",
+            "DM_API_KEY": "gsk_integration_test",
+        }
+        with patch.dict(os.environ, env, clear=False):
+            cfg = DungeonMasterConfig.from_env()
+            self.assertFalse(cfg.enabled)
+            self.assertEqual(cfg.backend, "groq")
+            self.assertEqual(cfg.model, "test-model")
+            self.assertEqual(cfg.temperature, 0.3)
+            self.assertEqual(cfg.max_active_rules, 30)
+            self.assertEqual(cfg.min_observations, 3)
+            self.assertEqual(cfg.min_confidence_auto_activate, 0.8)
+            self.assertEqual(cfg.api_key, "gsk_integration_test")
+
+    def test_dm_with_env_config_gets_provider(self):
+        from llm_providers import create_provider, GroqProvider
+
+        env = {
+            "DM_ENABLED": "true",
+            "DM_BACKEND": "groq",
+            "DM_API_KEY": "gsk_test_provider_key",
+            "DM_MODEL": "llama-3.3-70b-versatile",
+        }
+        with patch.dict(os.environ, env, clear=False):
+            cfg = DungeonMasterConfig.from_env()
+            self.assertIsNotNone(cfg.api_key, "api_key should not be None — from_env() must read DM_API_KEY")
+
+            provider = create_provider(
+                backend=cfg.backend,
+                api_key=cfg.api_key,
+                ollama_url="http://localhost:11434",
+            )
+            self.assertIsInstance(provider, GroqProvider)
+
+            tmpdir = tempfile.mkdtemp()
+            try:
+                dm = DungeonMaster(
+                    config=DungeonMasterConfig(
+                        state_dir=tmpdir,
+                        rules_dir=tmpdir,
+                        auto_save_interval=0,
+                        backend=cfg.backend,
+                        model=cfg.model,
+                        api_key=cfg.api_key,
+                    ),
+                    llm_provider=provider,
+                )
+                self.assertIsNotNone(dm.llm_provider)
+                self.assertIsInstance(dm.llm_provider, GroqProvider)
+            finally:
+                shutil.rmtree(tmpdir, ignore_errors=True)
+
+
 if __name__ == "__main__":
     unittest.main()
