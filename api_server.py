@@ -145,7 +145,7 @@ class StatusResponse(BaseModel):
 @app.on_event("startup")
 async def startup_event():
     """Initialize the NPC system on server start."""
-    global manager, relationship_tracker, quest_manager, quest_extractor, voice_system, event_system, performance_manager, dungeon_master, dm_rule_engine, simulation_engine, chronicle_store
+    global manager, relationship_tracker, quest_manager, quest_extractor, voice_system, event_system, performance_manager, dungeon_master, dm_rule_engine, simulation_engine, chronicle_store, conversation_manager
     
     # Initialize performance manager FIRST (for connection pooling)
     performance_manager = PerformanceManager(
@@ -212,6 +212,13 @@ async def startup_event():
     event_system = EventSystem()
     await event_system.start()
     print("✅ Event system started")
+
+    # Initialize NPC-to-NPC conversation manager
+    conversation_manager = ConversationManager(
+        npc_manager=manager,
+        relationship_tracker=relationship_tracker
+    )
+    print("✅ Conversation manager initialized")
 
     # Initialize Dungeon Master
     dm_config = DungeonMasterConfig.from_env()
@@ -1676,19 +1683,6 @@ class NPCConversationResponse(BaseModel):
     location: Optional[str] = None
 
 
-@app.on_event("startup")
-async def init_conversation_manager():
-    """Initialize conversation manager on startup."""
-    global conversation_manager
-    
-    if manager and not conversation_manager:
-        conversation_manager = ConversationManager(
-            npc_manager=manager,
-            relationship_tracker=relationship_tracker
-        )
-        print("✓ Conversation manager initialized")
-
-
 @app.post("/api/conversations/start", response_model=NPCConversationResponse)
 async def start_npc_conversation(request: StartNPCConversationRequest):
     """Start a conversation between two NPCs."""
@@ -1951,7 +1945,7 @@ async def list_conversation_topics():
 
 
 @app.post("/api/conversations/save")
-async def save_conversation_history():
+async def save_npc_conversation_history():
     """Save conversation history to disk."""
     if not conversation_manager:
         raise HTTPException(status_code=503, detail="Conversation manager not initialized")
@@ -1965,7 +1959,7 @@ async def save_conversation_history():
 
 
 @app.post("/api/conversations/load")
-async def load_conversation_history():
+async def load_npc_conversation_history():
     """Load conversation history from disk."""
     if not conversation_manager:
         raise HTTPException(status_code=503, detail="Conversation manager not initialized")
@@ -1989,25 +1983,6 @@ class BatchRequest(BaseModel):
 class PreGenerateRequest(BaseModel):
     npc_name: str
     npc_type: Optional[str] = None
-
-
-@app.on_event("startup")
-async def init_performance_manager():
-    """Initialize performance manager on startup."""
-    global performance_manager
-    
-    if not performance_manager:
-        performance_manager = PerformanceManager()
-        print("✓ Performance manager initialized")
-
-
-@app.get("/api/performance/stats")
-async def get_performance_stats():
-    """Get comprehensive performance statistics."""
-    if not performance_manager:
-        raise HTTPException(status_code=503, detail="Performance manager not initialized")
-    
-    return performance_manager.get_stats()
 
 
 @app.post("/api/performance/cache/clear")
@@ -2050,46 +2025,6 @@ async def load_cache():
         "status": "loaded",
         "cache_size": len(performance_manager.cache._cache)
     }
-
-
-@app.get("/api/performance/health")
-async def check_health():
-    """Check system health status."""
-    health = {
-        "status": "healthy",
-        "components": {}
-    }
-    
-    # Check Ollama
-    if performance_manager and performance_manager.connection_pool:
-        health["components"]["ollama"] = {
-            "healthy": performance_manager.connection_pool.is_healthy()
-        }
-    
-    # Check manager
-    health["components"]["npc_manager"] = {
-        "healthy": manager is not None,
-        "loaded_npcs": len(manager.npcs) if manager else 0
-    }
-    
-    # Check conversation manager
-    health["components"]["conversation_manager"] = {
-        "healthy": conversation_manager is not None,
-        "active_conversations": len(conversation_manager.active_conversations) if conversation_manager else 0
-    }
-    
-    # Check event system
-    health["components"]["event_system"] = {
-        "healthy": event_system is not None
-    }
-    
-    # Overall status
-    all_healthy = all(
-        c.get("healthy", False) for c in health["components"].values()
-    )
-    health["status"] = "healthy" if all_healthy else "degraded"
-    
-    return health
 
 
 @app.post("/api/performance/batch")
