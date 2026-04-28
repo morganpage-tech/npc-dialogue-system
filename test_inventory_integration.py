@@ -116,6 +116,7 @@ class TestBuildSystemPromptInventory(unittest.TestCase):
             }
             npc.relationship_tracker = None
             npc.lore_system = None
+            npc._dm_directive = None
             return npc
 
     def test_inventory_included_when_present(self):
