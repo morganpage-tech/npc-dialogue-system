@@ -254,6 +254,8 @@ class QuestExtractor:
 
         data = self._parse_json(raw)
         if not data or not data.get("has_quest"):
+            if not data:
+                logger.warning("Quest extraction: JSON parse failed for raw LLM response: %s", raw[:500])
             return None
 
         try:
@@ -317,7 +319,7 @@ class QuestExtractor:
             return quest
 
         except Exception as e:
-            logger.warning(f"Failed to parse extracted quest: {e}")
+            logger.warning("Failed to parse extracted quest data: %s | Raw response: %s", e, raw[:500])
             return None
 
     def detect_acceptance(
@@ -344,6 +346,7 @@ class QuestExtractor:
 
         data = self._parse_json(raw)
         if not data:
+            logger.warning("Quest acceptance: JSON parse failed for raw LLM response: %s", raw[:500])
             return "ignore"
 
         action = data.get("action", "ignore").lower()

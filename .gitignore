@@ -17,8 +17,13 @@ env/
 
 # Conversation history (local data)
 conversation_history/
-*.json
-!character_cards/*.json
+
+# Runtime data JSON files
+saves/*.json
+voice_cache/*.json
+voice_output/*.json
+lore_database/*.json
+chronicle_data/*.json
 
 # IDE
 .vscode/

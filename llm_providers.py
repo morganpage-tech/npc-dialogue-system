@@ -11,12 +11,32 @@ import json
 from abc import ABC, abstractmethod
 from typing import List, Dict, Optional, Generator
 import requests
+from urllib3.util.retry import Retry
+from requests.adapters import HTTPAdapter
 
 try:
     from dotenv import load_dotenv
     load_dotenv()
 except ImportError:
     pass
+
+
+def _build_session() -> requests.Session:
+    """Create a requests Session with retry strategy and connection pooling."""
+    session = requests.Session()
+    retry_strategy = Retry(
+        total=3,
+        backoff_factor=0.5,
+        status_forcelist=[500, 502, 503, 504],
+    )
+    adapter = HTTPAdapter(
+        max_retries=retry_strategy,
+        pool_connections=10,
+        pool_maxsize=10,
+    )
+    session.mount("http://", adapter)
+    session.mount("https://", adapter)
+    return session
 
 
 class LLMProvider(ABC):
@@ -50,6 +70,7 @@ class OllamaProvider(LLMProvider):
         self.base_url = base_url.rstrip("/")
         self.chat_url = f"{self.base_url}/api/chat"
         self.tags_url = f"{self.base_url}/api/tags"
+        self.session = _build_session()
 
     def generate(
         self,
@@ -68,7 +89,7 @@ class OllamaProvider(LLMProvider):
             },
         }
 
-        response = requests.post(self.chat_url, json=payload, timeout=120)
+        response = self.session.post(self.chat_url, json=payload, timeout=120)
         response.raise_for_status()
         result = response.json()
 
@@ -80,17 +101,17 @@ class OllamaProvider(LLMProvider):
 
     def check_connection(self) -> bool:
         try:
-            response = requests.get(self.tags_url, timeout=5)
+            response = self.session.get(self.tags_url, timeout=5)
             return response.status_code == 200
         except requests.exceptions.ConnectionError:
             return False
 
     def get_available_models(self) -> List[str]:
         try:
-            response = requests.get(self.tags_url, timeout=5)
+            response = self.session.get(self.tags_url, timeout=5)
             if response.status_code == 200:
                 return [m["name"] for m in response.json().get("models", [])]
-        except Exception:
+        except (requests.ConnectionError, requests.Timeout, ValueError, KeyError):
             pass
         return []
 
@@ -111,7 +132,7 @@ class OllamaProvider(LLMProvider):
             },
         }
 
-        with requests.post(
+        with self.session.post(
             self.chat_url, json=payload, stream=True, timeout=120
         ) as response:
             response.raise_for_status()
@@ -138,6 +159,7 @@ class GroqProvider(LLMProvider):
                 "Groq API key required. "
                 "Set GROQ_API_KEY env var or pass api_key parameter."
             )
+        self.session = _build_session()
 
     def _headers(self) -> Dict[str, str]:
         return {
@@ -159,7 +181,7 @@ class GroqProvider(LLMProvider):
             "max_tokens": max_tokens,
         }
 
-        response = requests.post(
+        response = self.session.post(
             self.BASE_URL, headers=self._headers(), json=payload, timeout=30
         )
         response.raise_for_status()
@@ -176,22 +198,22 @@ class GroqProvider(LLMProvider):
 
     def check_connection(self) -> bool:
         try:
-            response = requests.get(
+            response = self.session.get(
                 self.MODELS_URL, headers=self._headers(), timeout=10
             )
             return response.status_code == 200
-        except Exception:
+        except (requests.ConnectionError, requests.Timeout):
             return False
 
     def get_available_models(self) -> List[str]:
         try:
-            response = requests.get(
+            response = self.session.get(
                 self.MODELS_URL, headers=self._headers(), timeout=10
             )
             if response.status_code == 200:
                 data = response.json()
                 return [m["id"] for m in data.get("data", [])]
-        except Exception:
+        except (requests.ConnectionError, requests.Timeout, ValueError, KeyError):
             pass
         return []
 
@@ -210,7 +232,7 @@ class GroqProvider(LLMProvider):
             "stream": True,
         }
 
-        with requests.post(
+        with self.session.post(
             self.BASE_URL,
             headers=self._headers(),
             json=payload,

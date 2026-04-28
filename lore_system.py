@@ -5,6 +5,7 @@ Enables NPCs to reference game world events, locations, history, and lore
 
 import os
 import json
+import logging
 from typing import List, Dict, Optional, Any, Tuple
 from pathlib import Path
 from datetime import datetime
@@ -21,6 +22,8 @@ try:
     HAS_SENTENCE_TRANSFORMERS = True
 except ImportError:
     HAS_SENTENCE_TRANSFORMERS = False
+
+logger = logging.getLogger(__name__)
 
 
 class LoreEntry:
@@ -105,7 +108,8 @@ class LoreSystem:
     def __init__(
         self,
         persist_directory: str = "lore_database",
-        embedding_model: str = "all-MiniLM-L6-v2"
+        embedding_model: str = "all-MiniLM-L6-v2",
+        max_entries: int = 10000
     ):
         """
         Initialize the lore system.
@@ -113,9 +117,11 @@ class LoreSystem:
         Args:
             persist_directory: Directory to store the vector database
             embedding_model: Sentence transformer model for embeddings
+            max_entries: Maximum number of lore entries (memory safeguard)
         """
         self.persist_directory = Path(persist_directory)
         self.embedding_model_name = embedding_model
+        self.max_entries = max_entries
         
         # Initialize embedding model
         self.embedding_model = None
@@ -281,6 +287,14 @@ class LoreSystem:
         # Store in memory
         self.lore_entries[id] = entry
         
+        # Warn if exceeding max_entries safeguard
+        if len(self.lore_entries) > self.max_entries:
+            logger.warning(
+                "Lore entries (%d) exceeded max_entries limit (%d). "
+                "Consider removing unused entries to prevent unbounded memory growth.",
+                len(self.lore_entries), self.max_entries
+            )
+        
         # Add to ChromaDB
         self._add_to_chromadb([entry])
         
@@ -310,6 +324,14 @@ class LoreSystem:
             )
             self.lore_entries[entry.id] = entry
             lore_entries.append(entry)
+        
+        # Warn if exceeding max_entries safeguard
+        if len(self.lore_entries) > self.max_entries:
+            logger.warning(
+                "Lore entries (%d) exceeded max_entries limit (%d) after batch add. "
+                "Consider removing unused entries to prevent unbounded memory growth.",
+                len(self.lore_entries), self.max_entries
+            )
         
         self._add_to_chromadb(lore_entries)
         return lore_entries

@@ -336,7 +336,7 @@ class NPCConversationEngine:
         try:
             response = requests.get("http://localhost:11434/api/tags", timeout=2)
             return response.status_code == 200
-        except:
+        except Exception:
             return False
     
     def _get_npc_card(self, npc_name: str) -> Optional[Dict]:
@@ -552,10 +552,12 @@ class ConversationManager:
         conversation_engine: Optional[NPCConversationEngine] = None,
         relationship_tracker: Optional[RelationshipTracker] = None,
         lore_system: Optional[Any] = None,
+        max_history_size: int = 500,
     ):
         self.npc_manager = npc_manager
         self.relationship_tracker = relationship_tracker
         self.lore_system = lore_system
+        self.max_history_size = max_history_size
         
         # Create engine if not provided
         self.engine = conversation_engine or NPCConversationEngine(
@@ -567,7 +569,6 @@ class ConversationManager:
         # Active and completed conversations
         self.active_conversations: Dict[str, NPCConversation] = {}
         self.conversation_history: List[NPCConversation] = []
-        self.max_history = 100
         
         # NPC location tracking for proximity
         self.npc_locations: Dict[str, str] = {}  # npc_name -> location_id
@@ -648,8 +649,8 @@ class ConversationManager:
         del self.active_conversations[conversation_id]
         
         # Trim history
-        if len(self.conversation_history) > self.max_history:
-            self.conversation_history = self.conversation_history[-self.max_history:]
+        if len(self.conversation_history) > self.max_history_size:
+            self.conversation_history = self.conversation_history[-self.max_history_size:]
         
         # Trigger callback
         if self.on_conversation_end:

@@ -5,11 +5,14 @@ Tracks player-NPC relationships with scores, levels, and faction support
 
 import json
 import os
+import logging
 from pathlib import Path
 from typing import Dict, Optional, List
 from dataclasses import dataclass, asdict
 from enum import Enum
 import time
+
+logger = logging.getLogger(__name__)
 
 
 class RelationshipLevel(Enum):
@@ -44,16 +47,19 @@ class RelationshipTracker:
     Supports score tracking, level calculation, factions, and persistence.
     """
     
-    def __init__(self, player_id: str = "player", enable_time_decay: bool = False):
+    def __init__(self, player_id: str = "player", enable_time_decay: bool = False,
+                 max_relationships: int = 1000):
         """
         Initialize the relationship tracker.
         
         Args:
             player_id: Unique identifier for the player
             enable_time_decay: If True, relationships decay over time
+            max_relationships: Maximum number of relationships (memory safeguard)
         """
         self.player_id = player_id
         self.enable_time_decay = enable_time_decay
+        self.max_relationships = max_relationships
         self.relationships: Dict[str, RelationshipState] = {}
         self.factions: Dict[str, float] = {}  # faction_name -> score
         
@@ -66,6 +72,13 @@ class RelationshipTracker:
     def get_relationship(self, npc_name: str) -> RelationshipState:
         """Get or create relationship state for an NPC."""
         if npc_name not in self.relationships:
+            # Warn if exceeding max_relationships safeguard
+            if len(self.relationships) >= self.max_relationships:
+                logger.warning(
+                    "Relationships count (%d) reached max_relationships limit (%d). "
+                    "New entries will still be created, but consider pruning unused relationships.",
+                    len(self.relationships), self.max_relationships
+                )
             self.relationships[npc_name] = RelationshipState()
         return self.relationships[npc_name]
     
@@ -473,7 +486,7 @@ class RelationshipTracker:
                     try:
                         if level.name == value.upper():
                             matching.append(npc_name)
-                    except:
+                    except Exception:
                         if score == float(value):
                             matching.append(npc_name)
             except (ValueError, AttributeError):

@@ -60,7 +60,7 @@ class EventBroadcaster:
     
     def __init__(
         self,
-        history_size: int = 100,
+        history_size: int = 1000,
         ping_interval: int = 30,
         ping_timeout: int = 60,
     ):
@@ -68,7 +68,7 @@ class EventBroadcaster:
         Initialize the event broadcaster.
         
         Args:
-            history_size: Number of events to keep for reconnection
+            history_size: Maximum number of events to keep for reconnection (memory safeguard)
             ping_interval: Seconds between ping checks
             ping_timeout: Seconds before considering client dead
         """

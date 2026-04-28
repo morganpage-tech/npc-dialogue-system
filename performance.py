@@ -45,6 +45,9 @@ logger = logging.getLogger(__name__)
 class PerformanceMetrics:
     """Track performance metrics for the system."""
     
+    # Size limit for history list (memory safeguard)
+    max_history_size: int = 10000
+    
     # Request counts
     total_requests: int = 0
     cache_hits: int = 0
@@ -62,6 +65,9 @@ class PerformanceMetrics:
     errors: int = 0
     timeouts: int = 0
     
+    # History of individual request records for detailed analysis
+    history: List[Dict[str, Any]] = field(default_factory=list)
+    
     def record_request(self, generation_time: float, tokens: int, from_cache: bool = False):
         """Record a request."""
         self.total_requests += 1
@@ -71,6 +77,16 @@ class PerformanceMetrics:
             self.cache_misses += 1
             self.total_generation_time += generation_time
             self.total_tokens_generated += tokens
+        
+        # Append to history and enforce size limit
+        self.history.append({
+            "generation_time": generation_time,
+            "tokens": tokens,
+            "from_cache": from_cache,
+            "timestamp": time.time(),
+        })
+        if len(self.history) > self.max_history_size:
+            self.history = self.history[-self.max_history_size:]
     
     def get_stats(self) -> Dict[str, Any]:
         """Get statistics."""
@@ -112,6 +128,7 @@ class PerformanceMetrics:
         self.total_tokens_generated = 0
         self.errors = 0
         self.timeouts = 0
+        self.history.clear()
 
 
 # ============================================
@@ -390,7 +407,7 @@ class OllamaConnectionPool:
                 timeout=5
             )
             return response.status_code == 200
-        except:
+        except Exception:
             return False
     
     def is_healthy(self) -> bool:

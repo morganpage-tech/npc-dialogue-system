@@ -463,8 +463,9 @@ IMPORTANT:
         # Show relationship info if available
         if self.relationship_tracker:
             rel_level = self.relationship_tracker.get_level(self.character_name)
-            rel_score = self.relationship_tracker.get_relationship(self.character_name).score
-            print(f"\n💖 Relationship: {rel_level.name} ({rel_score:+.1f})")
+            rel = self.relationship_tracker.get_relationship(self.character_name)
+            if rel is not None and rel_level is not None:
+                print(f"\n💖 Relationship: {rel_level.name} ({rel.score:+.1f})")
         
         print(f"\n{'='*60}\n")
     

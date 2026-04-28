@@ -161,7 +161,7 @@ async def startup_event():
     try:
         performance_manager.load_state()
         print("✅ Loaded cached responses from disk")
-    except:
+    except Exception:
         pass
     
     # Initialize relationship tracker
@@ -584,7 +584,7 @@ async def list_characters():
                     "file": str(card_file),
                     "description": card.get("description", "")[:100] + "..."
                 })
-            except:
+            except Exception:
                 pass
     
     return {

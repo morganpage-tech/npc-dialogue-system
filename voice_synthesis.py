@@ -229,7 +229,7 @@ class ElevenLabsSynthesizer(VoiceSynthesizer):
                 }
                 for v in voice_list
             ]
-        except:
+        except Exception:
             return []
 
 
@@ -388,7 +388,7 @@ class CoquiSynthesizer(VoiceSynthesizer):
                 {"id": m, "name": m.split("/")[-1], "provider": "coqui"}
                 for m in models if m.startswith("tts_models/")
             ]
-        except:
+        except Exception:
             return []
 
 
@@ -609,7 +609,7 @@ class Pyttsx3Synthesizer(VoiceSynthesizer):
                 }
                 for i, v in enumerate(voices)
             ]
-        except:
+        except Exception:
             return []
 
 
