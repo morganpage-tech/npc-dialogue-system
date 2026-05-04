@@ -25,6 +25,11 @@ voice_output/*.json
 lore_database/*.json
 chronicle_data/*.json
 
+# Runtime state directories
+cache/
+dm_state/
+state_persistence/
+
 # IDE
 .vscode/
 .idea/
